@@ -1,0 +1,26 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local Firebase config
+firebase-applet-config.json
+firebase-applet-config.local.json
+
+# Local/private exports and handoff notes
+public/legacy-career-radar-import.json
+DETAILED_PROJECT_HANDOVER.md
+read_xlsx.py
+xlsx_summary.txt
+
+# Firebase local state
+.firebase/
+firebase-debug.log
+
+# OS/editor files
+.vscode/
+.idea/

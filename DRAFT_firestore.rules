@@ -1,0 +1,164 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Pillar 4.1): Catch-all deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions (Pillar 3 & 4.3): Path variables and core assertions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerified() {
+      // Mandate email verification for regular write paths (Pillar 4.critical)
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // ==========================================
+    // Validation Blueprints (Pillar 2, 4 & 5)
+    // ==========================================
+
+    function isValidProfile(data) {
+      return data.fullName is string && data.fullName.size() <= 200
+          && data.education is string && data.education.size() <= 300
+          && (!data.keys().contains('graduationDate') || (data.graduationDate is string && data.graduationDate.size() <= 100))
+          && (!data.keys().contains('gpa') || (data.gpa is number && data.gpa >= 0.0 && data.gpa <= 4.0))
+          && (!data.keys().contains('workExperienceCount') || data.workExperienceCount is number)
+          && data.experienceBrief is string && data.experienceBrief.size() <= 10000
+          && data.targetRoles is string && data.targetRoles.size() <= 1000
+          && (!data.keys().contains('preferredLocations') || (data.preferredLocations is string && data.preferredLocations.size() <= 500))
+          && (!data.keys().contains('salaryTargetMin') || data.salaryTargetMin is number)
+          && (!data.keys().contains('salaryTargetMax') || data.salaryTargetMax is number)
+          && (!data.keys().contains('portfolioWording') || (data.portfolioWording is string && data.portfolioWording.size() <= 5000));
+    }
+
+    function isValidCVEvidence(data) {
+      return data.evidenceId is string && data.evidenceId.size() <= 100 && data.evidenceId.matches('^[a-zA-Z0-9_\\-]+$')
+          && data.category is string && data.category.size() <= 100
+          && data.title is string && data.title.size() <= 200
+          && (!data.keys().contains('organization') || (data.organization is string && data.organization.size() <= 200))
+          && data.description is string && data.description.size() <= 10000
+          && data.isVerified is bool;
+    }
+
+    function isValidJobSearchRaw(data) {
+      return data.jobText is string && data.jobText.size() <= 100000
+          && data.sourceUrl is string && data.sourceUrl.size() <= 2000
+          && (!data.keys().contains('applyLink') || (data.applyLink is string && data.applyLink.size() <= 2000))
+          && (!data.keys().contains('company') || (data.company is string && data.company.size() <= 200))
+          && (!data.keys().contains('role') || (data.role is string && data.role.size() <= 200))
+          && (!data.keys().contains('location') || (data.location is string && data.location.size() <= 200))
+          && (!data.keys().contains('searchQuery') || (data.searchQuery is string && data.searchQuery.size() <= 500))
+          && (!data.keys().contains('sourceType') || (data.sourceType is string && data.sourceType.size() <= 100))
+          && data.discoveryStatus is string && (data.discoveryStatus == 'Staged' || data.discoveryStatus == 'Processing' || data.discoveryStatus == 'Processed' || data.discoveryStatus == 'Rejected')
+          && (!data.keys().contains('dedupeKey') || (data.dedupeKey is string && data.dedupeKey.size() <= 256));
+    }
+
+    function isValidCareerRadarOpportunity(data) {
+      return data.company is string && data.company.size() <= 200
+          && data.role is string && data.role.size() <= 200
+          && (!data.keys().contains('location') || (data.location is string && data.location.size() <= 200))
+          && (!data.keys().contains('sourceUrl') || (data.sourceUrl is string && data.sourceUrl.size() <= 2000))
+          && (!data.keys().contains('applyLink') || (data.applyLink is string && data.applyLink.size() <= 2000))
+          && (!data.keys().contains('jobText') || (data.jobText is string && data.jobText.size() <= 100000))
+          && data.fitScore is number && data.fitScore >= 0 && data.fitScore <= 100
+          && data.decision is string && (data.decision == 'Apply Now' || data.decision == 'Apply After CV Adjustment' || data.decision == 'Save for Later' || data.decision == 'Skip' || data.decision == 'Verify First')
+          && (!data.keys().contains('analysisNotes') || (data.analysisNotes is string && data.analysisNotes.size() <= 5000))
+          && (!data.keys().contains('roleDna') || (data.roleDna is string && data.roleDna.size() <= 500))
+          && (!data.keys().contains('educationFit') || (data.educationFit is string && data.educationFit.size() <= 1000))
+          && (!data.keys().contains('experienceFit') || (data.experienceFit is string && data.experienceFit.size() <= 1000))
+          && (!data.keys().contains('portfolioFit') || (data.portfolioFit is string && data.portfolioFit.size() <= 1000))
+          && (!data.keys().contains('hasRedFlags') || data.hasRedFlags is bool)
+          && (!data.keys().contains('redFlags') || (data.redFlags is string && data.redFlags.size() <= 2000))
+          && (!data.keys().contains('isStretchRole') || data.isStretchRole is bool);
+    }
+
+    function isValidApplicationPack(data) {
+      return data.opportunityId is string && data.opportunityId.size() <= 128
+          && data.company is string && data.company.size() <= 200
+          && data.role is string && data.role.size() <= 200
+          && data.applicationEnergy is string && (data.applicationEnergy == 'High' || data.applicationEnergy == 'Medium' || data.applicationEnergy == 'Lock' || data.applicationEnergy == 'None')
+          && (!data.keys().contains('cvAction') || (data.cvAction is string && data.cvAction.size() <= 200))
+          && (!data.keys().contains('cvAngle') || (data.cvAngle is string && data.cvAngle.size() <= 500))
+          && (!data.keys().contains('keywordsToEmphasize') || (data.keywordsToEmphasize is string && data.keywordsToEmphasize.size() <= 1000))
+          && (!data.keys().contains('summaryRewrite') || (data.summaryRewrite is string && data.summaryRewrite.size() <= 5000))
+          && (!data.keys().contains('bulletPrioritization') || (data.bulletPrioritization is string && data.bulletPrioritization.size() <= 5000))
+          && (!data.keys().contains('coverMessage') || (data.coverMessage is string && data.coverMessage.size() <= 10000))
+          && (!data.keys().contains('linkedinMessage') || (data.linkedinMessage is string && data.linkedinMessage.size() <= 5000))
+          && (!data.keys().contains('portfolioEvidence') || (data.portfolioEvidence is string && data.portfolioEvidence.size() <= 5000))
+          && (!data.keys().contains('reviewNotes') || (data.reviewNotes is string && data.reviewNotes.size() <= 5000))
+          && (!data.keys().contains('hardSkills') || (data.hardSkills is string && data.hardSkills.size() <= 2000))
+          && (!data.keys().contains('softSkills') || (data.softSkills is string && data.softSkills.size() <= 2000))
+          && (!data.keys().contains('cvSectionActions') || (data.cvSectionActions is string && data.cvSectionActions.size() <= 5000))
+          && (!data.keys().contains('cvReadyLink') || (data.cvReadyLink is string && data.cvReadyLink.size() <= 2000))
+          && (!data.keys().contains('cvReadyStatus') || (data.cvReadyStatus is string && (data.cvReadyStatus == 'Draft' || data.cvReadyStatus == 'Generated' || data.cvReadyStatus == 'Reviewed' || data.cvReadyStatus == 'Submitted')))
+          && (!data.keys().contains('cvReadyNotes') || (data.cvReadyNotes is string && data.cvReadyNotes.size() <= 5000));
+    }
+
+    // 6. CV Editing Checklist Collection
+    match /profiles/{userId}/cv_checklists/{checklistId} {
+      allow read: if isOwner(userId);
+      allow delete: if isOwner(userId);
+      allow create: if isOwner(userId)
+                    && isVerified()
+                    && isValidId(checklistId)
+                    && incoming().keys().hasAll(['opportunityId', 'cvSection', 'finalSuggestedText', 'isReadyToCopy', 'isStale', 'isDone', 'createdAt', 'updatedAt'])
+                    && incoming().keys().size() <= 17
+                    && incoming().createdAt == request.time
+                    && incoming().updatedAt == request.time
+                    && isValidCVEditChecklist(incoming());
+      allow update: if isOwner(userId)
+                    && isVerified()
+                    && incoming().updatedAt == request.time
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().opportunityId == existing().opportunityId
+                    && isValidCVEditChecklist(incoming());
+    }
+
+    // 7. Daily Apply Brief Collection (State Machine Isolation & Locks)
+    match /profiles/{userId}/daily_apply_briefs/{briefId} {
+      allow read: if isOwner(userId);
+      allow delete: if isOwner(userId);
+      allow create: if isOwner(userId)
+                    && isVerified()
+                    && isValidId(briefId)
+                    && incoming().keys().hasAll(['opportunityId', 'company', 'role', 'fitScore', 'decision', 'status', 'createdAt', 'updatedAt'])
+                    && incoming().keys().size() <= 14
+                    && incoming().createdAt == request.time
+                    && incoming().updatedAt == request.time
+                    && isValidDailyApplyBrief(incoming());
+      allow update: if isOwner(userId)
+                    && isVerified()
+                    && incoming().updatedAt == request.time
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().opportunityId == existing().opportunityId
+                    && (
+                      // Terminal State Lock Rule (Pillar 6 & 11)
+                      // If brief status is not in lock categories, all parameters can update standardly.
+                      // If currently in a terminal locked status, we only permit modification to status, notes, and updatedAt.
+                      !(existing().status in ['Applied', 'Closed', 'Expired', 'Cancelled', 'Canceled', 'Rejected', 'Withdrawn', 'Skipped']) ||
+                      incoming().diff(existing()).affectedKeys().hasOnly(['status', 'userNotes', 'updatedAt'])
+                    )
+                    && isValidDailyApplyBrief(incoming());
+    }
+  }
+}

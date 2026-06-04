@@ -1,0 +1,6 @@
+{
+  "name": "AI Career Radar",
+  "description": "A comprehensive web-based career intelligence platform to plan career targets, optimize CV evidence, and manage job applications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

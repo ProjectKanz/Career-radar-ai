@@ -1,0 +1,467 @@
+{
+  "entities": {
+    "Profile": {
+      "title": "Profile",
+      "description": "The user's reusable bio, target profiles, experience, and educational background used to calibrate the scoring model.",
+      "type": "object",
+      "properties": {
+        "fullName": {
+          "type": "string",
+          "description": "Full legal or professional name of the candidate."
+        },
+        "education": {
+          "type": "string",
+          "description": "Latest degree description (e.g., S1 Management, Universitas Negeri Malang)."
+        },
+        "graduationDate": {
+          "type": "string",
+          "description": "Date or period when graduated (e.g., Jun 2025)."
+        },
+        "gpa": {
+          "type": "number",
+          "description": "Grade point average (e.g., 3.62)."
+        },
+        "workExperienceCount": {
+          "type": "number",
+          "description": "Years of experience or count of key experiences."
+        },
+        "experienceBrief": {
+          "type": "string",
+          "description": "Detailed multi-paragraph context of experiences and achievements (e.g., Material Control, site tracking, coordinating, XL Axiata analyst internship)."
+        },
+        "targetRoles": {
+          "type": "string",
+          "description": "Target job families (e.g., Business Operations, Management Trainee, Analyst, Technology Consulting)."
+        },
+        "preferredLocations": {
+          "type": "string",
+          "description": "Preferred areas or workspace types (e.g., Jakarta, hybrid, remote)."
+        },
+        "salaryTargetMin": {
+          "type": "number",
+          "description": "Minimum salary target in IDR (e.g., 7000000)."
+        },
+        "salaryTargetMax": {
+          "type": "number",
+          "description": "Maximum salary target in IDR (e.g., 10000000)."
+        },
+        "portfolioWording": {
+          "type": "string",
+          "description": "Default text or technical highlights describing personal portfolio products, such as the AI Workflow Automation OS."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
+        }
+      },
+      "required": ["fullName", "education", "experienceBrief", "targetRoles", "updatedAt"]
+    },
+    "CVEvidence": {
+      "title": "CVEvidence",
+      "description": "A verified item or bank entry of historical experience that acts as ground-truth evidence.",
+      "type": "object",
+      "properties": {
+        "evidenceId": {
+          "type": "string",
+          "description": "Rigid identifier (e.g., CSA-01, XL-01, PORT-01)."
+        },
+        "category": {
+          "type": "string",
+          "description": "Category of evidence (e.g., Work Experience, Internship, Project)."
+        },
+        "title": {
+          "type": "string",
+          "description": "The title or role associated with the evidence."
+        },
+        "organization": {
+          "type": "string",
+          "description": "The company, organization, or personal brand."
+        },
+        "description": {
+          "type": "string",
+          "description": "Full descriptions of the quantitative achievements, tools, and workflows."
+        },
+        "isVerified": {
+          "type": "boolean",
+          "description": "Whether the user has verified this action item is accurate."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["evidenceId", "category", "title", "description", "isVerified", "updatedAt"]
+    },
+    "JobSearchRaw": {
+      "title": "JobSearchRaw",
+      "description": "Staging area for incoming raw, uncrawled, or pasted job postings.",
+      "type": "object",
+      "properties": {
+        "sourceUrl": {
+          "type": "string",
+          "description": "The URL source of the posting."
+        },
+        "applyLink": {
+          "type": "string",
+          "description": "The target apply page URL."
+        },
+        "jobText": {
+          "type": "string",
+          "description": "Raw unparsed text representation of the job."
+        },
+        "company": {
+          "type": "string",
+          "description": "Target company name (optional)."
+        },
+        "role": {
+          "type": "string",
+          "description": "Target role name (optional)."
+        },
+        "location": {
+          "type": "string",
+          "description": "Target location context."
+        },
+        "searchQuery": {
+          "type": "string",
+          "description": "Search keyword or trigger used to fetch it."
+        },
+        "sourceType": {
+          "type": "string",
+          "description": "Platform origin (e.g., LinkedIn, JobStreet, Glints)."
+        },
+        "discoveryStatus": {
+          "type": "string",
+          "enum": ["Staged", "Processing", "Processed", "Rejected"],
+          "description": "Staging workflow status."
+        },
+        "dedupeKey": {
+          "type": "string",
+          "description": "Unique key to prevent repeated parsing."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["jobText", "sourceUrl", "discoveryStatus", "createdAt", "updatedAt"]
+    },
+    "CareerRadarOpportunity": {
+      "title": "CareerRadarOpportunity",
+      "description": "Successful structured opportunities parsed, classified, and scored by the radar.",
+      "type": "object",
+      "properties": {
+        "company": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "type": "string"
+        },
+        "applyLink": {
+          "type": "string"
+        },
+        "jobText": {
+          "type": "string"
+        },
+        "fitScore": {
+          "type": "number",
+          "description": "Objective compatibility score (0-100)."
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["Apply Now", "Apply After CV Adjustment", "Save for Later", "Skip", "Verify First"]
+        },
+        "analysisNotes": {
+          "type": "string",
+          "description": "Qualitative reasoning (e.g., gaps, positioning opportunities)."
+        },
+        "roleDna": {
+          "type": "string",
+          "description": "Extracted style/DNA (e.g., MT, Data Analyst, Operations, Tech Consulting)."
+        },
+        "educationFit": {
+          "type": "string"
+        },
+        "experienceFit": {
+          "type": "string"
+        },
+        "portfolioFit": {
+          "type": "string"
+        },
+        "hasRedFlags": {
+          "type": "boolean"
+        },
+        "redFlags": {
+          "type": "string"
+        },
+        "isStretchRole": {
+          "type": "boolean",
+          "description": "If the role requires 2+ years of experience but is processed with cautious scoring."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["company", "role", "fitScore", "decision", "createdAt", "updatedAt"]
+    },
+    "ApplicationPack": {
+      "title": "ApplicationPack",
+      "description": "Tailored application content and optimized copywriting matching a specific job.",
+      "type": "object",
+      "properties": {
+        "opportunityId": {
+          "type": "string",
+          "description": "ID link to CareerRadarOpportunity."
+        },
+        "company": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "applicationEnergy": {
+          "type": "string",
+          "description": "High / Medium / Lock rating representing priority focus."
+        },
+        "cvAction": {
+          "type": "string",
+          "description": "Suggested approach (e.g. Angle Shift, Minor Edits, Standard Template)."
+        },
+        "cvAngle": {
+          "type": "string",
+          "description": "Primary communication framing (e.g. Highlight Tech & Systems)."
+        },
+        "keywordsToEmphasize": {
+          "type": "string",
+          "description": "Sanitized hard skills to bubble up."
+        },
+        "summaryRewrite": {
+          "type": "string",
+          "description": "sanitized, copy-ready customized personal summaries."
+        },
+        "bulletPrioritization": {
+          "type": "string",
+          "description": "Grounded list of project or job bullets to rearrange or emphasize."
+        },
+        "coverMessage": {
+          "type": "string"
+        },
+        "linkedinMessage": {
+          "type": "string"
+        },
+        "portfolioEvidence": {
+          "type": "string",
+          "description": "How the AI Workflow Automation OS or site coordinating tracks align."
+        },
+        "reviewNotes": {
+          "type": "string"
+        },
+        "hardSkills": {
+          "type": "string"
+        },
+        "softSkills": {
+          "type": "string"
+        },
+        "cvSectionActions": {
+          "type": "string"
+        },
+        "cvReadyLink": {
+          "type": "string",
+          "description": "Link to generated Google Docs/PDF."
+        },
+        "cvReadyStatus": {
+          "type": "string",
+          "enum": ["Draft", "Generated", "Reviewed", "Submitted"]
+        },
+        "cvReadyAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "cvReadyNotes": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["opportunityId", "company", "role", "applicationEnergy", "createdAt", "updatedAt"]
+    },
+    "CVEditChecklist": {
+      "title": "CVEditChecklist",
+      "description": "Atomic edit tasks derived from analysis, providing copy-quality evidence-grounded suggestions.",
+      "type": "object",
+      "properties": {
+        "opportunityId": {
+          "type": "string"
+        },
+        "company": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "cvSection": {
+          "type": "string",
+          "description": "CV Section identifier (e.g. Summary, Experience, Project, Skill)."
+        },
+        "editType": {
+          "type": "string"
+        },
+        "sourceEvidence": {
+          "type": "string",
+          "description": "Factual reference to experience from the database."
+        },
+        "finalSuggestedText": {
+          "type": "string",
+          "description": "Sanitized candidate-facing suggerations ready to copy."
+        },
+        "whyTheChangeMatters": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string"
+        },
+        "evidenceId": {
+          "type": "string",
+          "description": "Grounding verification reference linking this edit back to the CV_Evidence_Bank."
+        },
+        "groundingStatus": {
+          "type": "string",
+          "enum": ["Grounded", "Unverified", "Pending"]
+        },
+        "isReadyToCopy": {
+          "type": "boolean"
+        },
+        "qualityNotes": {
+          "type": "string",
+          "description": "Validation notes ensuring zero hallucinations."
+        },
+        "isStale": {
+          "type": "boolean",
+          "description": "Flags older checklist entries of the same company that were superseded."
+        },
+        "isDone": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["opportunityId", "cvSection", "finalSuggestedText", "isReadyToCopy", "isStale", "isDone", "createdAt", "updatedAt"]
+    },
+    "DailyApplyBrief": {
+      "title": "DailyApplyBrief",
+      "description": "Lightweight action queue and status memory tracker summarizing target listings.",
+      "type": "object",
+      "properties": {
+        "opportunityId": {
+          "type": "string"
+        },
+        "company": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "fitScore": {
+          "type": "number"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "applicationEnergy": {
+          "type": "string"
+        },
+        "cvAction": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string"
+        },
+        "userActionNeeded": {
+          "type": "string",
+          "description": "Custom actions like review and update grounding."
+        },
+        "briefDate": {
+          "type": "string",
+          "description": "Brief generation date window (YYYY-MM-DD)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Applied", "Expired", "Cancelled", "Canceled", "Closed", "Skipped", "Not Applied", "Not Applied - Closed", "Not Applied - Expired", "Rejected", "Withdrawn"]
+        },
+        "userNotes": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["opportunityId", "company", "role", "fitScore", "decision", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/profiles/{userId}": {
+      "schema": "Profile",
+      "description": "The user's direct profile context and core metadata."
+    },
+    "/profiles/{userId}/cv_evidences/{evidenceId}": {
+      "schema": "CVEvidence",
+      "description": "User's evidence bank of verified facts for CV items."
+    },
+    "/profiles/{userId}/job_search_raw/{rawId}": {
+      "schema": "JobSearchRaw",
+      "description": "Staging logs for jobs crawled, parsed, or copied to prepare for radar."
+    },
+    "/profiles/{userId}/opportunities/{radarId}": {
+      "schema": "CareerRadarOpportunity",
+      "description": "Analyzed job openings with scores, evaluations, and decision parameters."
+    },
+    "/profiles/{userId}/application_packs/{packId}": {
+      "schema": "ApplicationPack",
+      "description": "Grounded cover briefs, angle updates, summaries, and copy suggestions per analyzed opportunity."
+    },
+    "/profiles/{userId}/cv_checklists/{checklistId}": {
+      "schema": "CVEditChecklist",
+      "description": "Actionable improvements and atomic edit suggestions with grounding checks."
+    },
+    "/profiles/{userId}/daily_apply_briefs/{briefId}": {
+      "schema": "DailyApplyBrief",
+      "description": "Daily application tasks and status history trackers."
+    }
+  }
+}
