@@ -56,6 +56,47 @@ function safeText(value: unknown, fallback = '-') {
   }
 }
 
+function extractApiErrorMessage(value: unknown) {
+  if (!value) return 'Request failed.';
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return extractApiErrorMessage(parsed);
+    } catch (_) {
+      return value;
+    }
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (record.error) return extractApiErrorMessage(record.error);
+    if (record.message) return String(record.message);
+  }
+  return String(value);
+}
+
+function userFacingAiError(value: unknown) {
+  const message = extractApiErrorMessage(value);
+  const lower = message.toLowerCase();
+
+  if (lower.includes('api key') || lower.includes('ai settings')) {
+    return message;
+  }
+
+  if (message.includes('503') || lower.includes('high demand') || lower.includes('unavailable')) {
+    return 'Gemini sedang padat. Coba lagi beberapa menit lagi, aktifkan Dry Run untuk preview gratis, atau coba lagi dengan API key/model yang kuotanya masih tersedia.';
+  }
+
+  if (lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource exhausted')) {
+    return 'Kuota atau batas gratis Gemini sedang tercapai. Coba lagi nanti, aktifkan Dry Run, atau gunakan API key Gemini lain.';
+  }
+
+  if (lower.includes('permission') || lower.includes('forbidden') || lower.includes('unauthorized')) {
+    return 'API key Gemini belum bisa dipakai untuk request ini. Cek kembali key di AI Settings atau buat API key baru dari Google AI Studio.';
+  }
+
+  return message;
+}
+
 function hashString(value: string) {
   let hash = 5381;
   for (let index = 0; index < value.length; index += 1) {
@@ -255,7 +296,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
         try {
           const errData = await response.json();
           if (errData && errData.error) {
-            errMsg = errData.error;
+            errMsg = userFacingAiError(errData.error);
           }
         } catch (_) {}
         throw new Error(errMsg);
@@ -306,7 +347,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
         setPreviewStatus('error');
         setPreviewError(err.message || 'Preview generation failed.');
       }
-      setError(err.message || 'Gagal menganalisis lowongan.');
+      setError(userFacingAiError(err.message || err || 'Gagal menganalisis lowongan.'));
     } finally {
       setAnalyzing(false);
     }
@@ -449,6 +490,8 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
 
   // Warning state if profile is fully empty
   const isProfileEmpty = !profile || !profile.fullName || (profile.experienceBrief?.length ?? 0) < 5;
+  const evidenceCount = evidences.length;
+  const hasApiKey = hasStoredGeminiApiKey();
 
   return (
     <div id="radar_panel_root" className="max-w-5xl mx-auto py-6 font-sans">
@@ -461,6 +504,35 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
           <p className="mt-1 text-sm text-slate-500">
             Paste a job posting below. Gemini will extract its Technical DNA and ground it against your Experience Fact-Bank.
           </p>
+        </div>
+      </div>
+
+      <div className="mb-8 rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+              <Clipboard className="h-3.5 w-3.5" />
+              <span>Quick start for first-time users</span>
+            </div>
+            <h3 className="mt-3 text-lg font-bold text-slate-900">Set up your CV context before spending an AI call</h3>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-500">
+              Dry Run is safe for testing. Real AI matching works best after your profile, evidence, and Gemini key are ready.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs font-bold text-slate-600 sm:grid-cols-4">
+            <div className={`rounded-xl border px-3 py-2 ${isProfileEmpty ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-100 bg-emerald-50 text-emerald-700'}`}>
+              Profile {isProfileEmpty ? 'needed' : 'ready'}
+            </div>
+            <div className={`rounded-xl border px-3 py-2 ${evidenceCount === 0 ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-100 bg-emerald-50 text-emerald-700'}`}>
+              Evidence {evidenceCount}
+            </div>
+            <div className={`rounded-xl border px-3 py-2 ${hasApiKey ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+              API key {hasApiKey ? 'ready' : 'optional'}
+            </div>
+            <div className={`rounded-xl border px-3 py-2 ${dryRunAi ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+              Dry Run {dryRunAi ? 'on' : 'off'}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -477,9 +549,9 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
               </>
             ) : (
               <>
-                <h4 className="font-bold text-sm">Profile Context Unanchored</h4>
+                <h4 className="font-bold text-sm">Profile Context Needed</h4>
                 <p className="text-xs text-orange-700 mt-1">
-                  Your Profile is currently blank. We strongly recommend completing your <strong>Candidate Profile Context</strong> and adding achievements to the <strong>CV Evidence Fact-Bank</strong> before running matches, so the AI can perform precise relevance matches.
+                  Fill <strong>Candidate Profile Context</strong> and add at least a few items in <strong>CV Evidence Fact-Bank</strong> before real AI matching. You can still use Dry Run to preview request size for free.
                 </p>
               </>
             )}
@@ -491,7 +563,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
         <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl mb-8 flex items-start space-x-3 text-rose-800 animate-fade-in shadow-sm">
           <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
           <div className="flex-1">
-            <h4 className="font-bold text-sm text-rose-950">Biaya atau Batas Gratis Terdeteksi</h4>
+            <h4 className="font-bold text-sm text-rose-950">AI request needs attention</h4>
             <p className="text-xs text-rose-700 mt-1 leading-relaxed">
               {error}
             </p>
