@@ -3,15 +3,24 @@ import { ApplicationPack, CVEditChecklist, CVEvidence, CareerRadarOpportunity, P
 export interface CVTemplateFields {
   targetTitle: string;
   professionalSummary: string;
-  csaBullet1: string;
-  csaBullet2: string;
-  csaBullet3: string;
-  xlBullet1: string;
-  xlBullet2: string;
-  xlBullet3: string;
-  portfolioBullet1: string;
-  portfolioBullet2: string;
-  portfolioBullet3: string;
+  experience1Title: string;
+  experience1Organization: string;
+  experience1Date: string;
+  experience1Bullet1: string;
+  experience1Bullet2: string;
+  experience1Bullet3: string;
+  experience2Title: string;
+  experience2Organization: string;
+  experience2Date: string;
+  experience2Bullet1: string;
+  experience2Bullet2: string;
+  experience2Bullet3: string;
+  project1Title: string;
+  project1Bullet1: string;
+  project2Title: string;
+  project2Bullet1: string;
+  project3Title: string;
+  project3Bullet1: string;
   certifications: string;
   certificationBullet1: string;
   certificationBullet2: string;
@@ -23,6 +32,18 @@ export interface CVTemplateFields {
   hardSkills: string;
   softSkills: string;
   languages: string;
+}
+
+interface LegacyCVTemplateFields {
+  csaBullet1?: string;
+  csaBullet2?: string;
+  csaBullet3?: string;
+  xlBullet1?: string;
+  xlBullet2?: string;
+  xlBullet3?: string;
+  portfolioBullet1?: string;
+  portfolioBullet2?: string;
+  portfolioBullet3?: string;
 }
 
 interface GenerateCvDocInput {
@@ -122,7 +143,7 @@ export function extractGoogleDocId(input: string) {
   return raw;
 }
 
-export function validateCvTemplateFields(input: Partial<CVTemplateFields>): CVTemplateFields {
+export function validateCvTemplateFields(input: Partial<CVTemplateFields & LegacyCVTemplateFields>): CVTemplateFields {
   const legacyCertifications = [
     input.certificationBullet1,
     input.certificationBullet2,
@@ -133,15 +154,24 @@ export function validateCvTemplateFields(input: Partial<CVTemplateFields>): CVTe
   return {
     targetTitle: templateValue(input.targetTitle),
     professionalSummary: templateValue(input.professionalSummary),
-    csaBullet1: templateValue(input.csaBullet1),
-    csaBullet2: templateValue(input.csaBullet2),
-    csaBullet3: templateValue(input.csaBullet3),
-    xlBullet1: templateValue(input.xlBullet1),
-    xlBullet2: templateValue(input.xlBullet2),
-    xlBullet3: templateValue(input.xlBullet3),
-    portfolioBullet1: templateValue(input.portfolioBullet1),
-    portfolioBullet2: templateValue(input.portfolioBullet2),
-    portfolioBullet3: templateValue(input.portfolioBullet3),
+    experience1Title: templateValue(input.experience1Title),
+    experience1Organization: templateValue(input.experience1Organization),
+    experience1Date: templateValue(input.experience1Date),
+    experience1Bullet1: templateValue(input.experience1Bullet1 || input.csaBullet1),
+    experience1Bullet2: templateValue(input.experience1Bullet2 || input.csaBullet2),
+    experience1Bullet3: templateValue(input.experience1Bullet3 || input.csaBullet3),
+    experience2Title: templateValue(input.experience2Title),
+    experience2Organization: templateValue(input.experience2Organization),
+    experience2Date: templateValue(input.experience2Date),
+    experience2Bullet1: templateValue(input.experience2Bullet1 || input.xlBullet1),
+    experience2Bullet2: templateValue(input.experience2Bullet2 || input.xlBullet2),
+    experience2Bullet3: templateValue(input.experience2Bullet3 || input.xlBullet3),
+    project1Title: templateValue(input.project1Title),
+    project1Bullet1: templateValue(input.project1Bullet1 || input.portfolioBullet1),
+    project2Title: templateValue(input.project2Title),
+    project2Bullet1: templateValue(input.project2Bullet1 || input.portfolioBullet2),
+    project3Title: templateValue(input.project3Title),
+    project3Bullet1: templateValue(input.project3Bullet1 || input.portfolioBullet3),
     certifications: templateValue(input.certifications || legacyCertifications),
     certificationBullet1: templateValue(input.certificationBullet1),
     certificationBullet2: templateValue(input.certificationBullet2),
@@ -235,28 +265,34 @@ export function buildCvHtml(input: RenderCvInput) {
     <p>${escapeHtml(profile.education || WARNING)}</p>
 
     <h2>Work Experience</h2>
-    <h3>PT Cahaya Sriwijaya Abadi</h3>
-    <p class="meta">Document Controller &amp; Material Control Lead</p>
+    <h3>${escapeHtml(fields.experience1Title)}</h3>
+    <p class="meta">${escapeHtml([fields.experience1Organization, fields.experience1Date].filter((item) => item && item !== WARNING).join(' | ') || WARNING)}</p>
     <ul>
-      ${bullet(fields.csaBullet1)}
-      ${bullet(fields.csaBullet2)}
-      ${bullet(fields.csaBullet3)}
+      ${bullet(fields.experience1Bullet1)}
+      ${bullet(fields.experience1Bullet2)}
+      ${bullet(fields.experience1Bullet3)}
     </ul>
 
-    <h3>PT XL Axiata Tbk</h3>
-    <p class="meta">Data &amp; Digital Channel Analyst Intern</p>
+    <h3>${escapeHtml(fields.experience2Title)}</h3>
+    <p class="meta">${escapeHtml([fields.experience2Organization, fields.experience2Date].filter((item) => item && item !== WARNING).join(' | ') || WARNING)}</p>
     <ul>
-      ${bullet(fields.xlBullet1)}
-      ${bullet(fields.xlBullet2)}
-      ${bullet(fields.xlBullet3)}
+      ${bullet(fields.experience2Bullet1)}
+      ${bullet(fields.experience2Bullet2)}
+      ${bullet(fields.experience2Bullet3)}
     </ul>
 
     <h2>Project / Portfolio</h2>
-    <h3>AI Productivity Projects</h3>
+    <h3>${escapeHtml(fields.project1Title)}</h3>
     <ul>
-      ${bullet(fields.portfolioBullet1)}
-      ${bullet(fields.portfolioBullet2)}
-      ${bullet(fields.portfolioBullet3)}
+      ${bullet(fields.project1Bullet1)}
+    </ul>
+    <h3>${escapeHtml(fields.project2Title)}</h3>
+    <ul>
+      ${bullet(fields.project2Bullet1)}
+    </ul>
+    <h3>${escapeHtml(fields.project3Title)}</h3>
+    <ul>
+      ${bullet(fields.project3Bullet1)}
     </ul>
 
     <h2>Certifications</h2>
@@ -286,15 +322,33 @@ function replacementMap(fields: CVTemplateFields) {
   return {
     '{{TARGET_TITLE}}': safeFields.targetTitle,
     '{{PROFESSIONAL_SUMMARY}}': safeFields.professionalSummary,
-    '{{CSA_BULLET_1}}': safeFields.csaBullet1,
-    '{{CSA_BULLET_2}}': safeFields.csaBullet2,
-    '{{CSA_BULLET_3}}': safeFields.csaBullet3,
-    '{{XL_BULLET_1}}': safeFields.xlBullet1,
-    '{{XL_BULLET_2}}': safeFields.xlBullet2,
-    '{{XL_BULLET_3}}': safeFields.xlBullet3,
-    '{{PORTFOLIO_BULLET_1}}': safeFields.portfolioBullet1,
-    '{{PORTFOLIO_BULLET_2}}': safeFields.portfolioBullet2,
-    '{{PORTFOLIO_BULLET_3}}': safeFields.portfolioBullet3,
+    '{{EXPERIENCE_1_TITLE}}': safeFields.experience1Title,
+    '{{EXPERIENCE_1_ORGANIZATION}}': safeFields.experience1Organization,
+    '{{EXPERIENCE_1_DATE}}': safeFields.experience1Date,
+    '{{EXPERIENCE_1_BULLET_1}}': safeFields.experience1Bullet1,
+    '{{EXPERIENCE_1_BULLET_2}}': safeFields.experience1Bullet2,
+    '{{EXPERIENCE_1_BULLET_3}}': safeFields.experience1Bullet3,
+    '{{EXPERIENCE_2_TITLE}}': safeFields.experience2Title,
+    '{{EXPERIENCE_2_ORGANIZATION}}': safeFields.experience2Organization,
+    '{{EXPERIENCE_2_DATE}}': safeFields.experience2Date,
+    '{{EXPERIENCE_2_BULLET_1}}': safeFields.experience2Bullet1,
+    '{{EXPERIENCE_2_BULLET_2}}': safeFields.experience2Bullet2,
+    '{{EXPERIENCE_2_BULLET_3}}': safeFields.experience2Bullet3,
+    '{{PROJECT_1_TITLE}}': safeFields.project1Title,
+    '{{PROJECT_1_BULLET_1}}': safeFields.project1Bullet1,
+    '{{PROJECT_2_TITLE}}': safeFields.project2Title,
+    '{{PROJECT_2_BULLET_1}}': safeFields.project2Bullet1,
+    '{{PROJECT_3_TITLE}}': safeFields.project3Title,
+    '{{PROJECT_3_BULLET_1}}': safeFields.project3Bullet1,
+    '{{CSA_BULLET_1}}': safeFields.experience1Bullet1,
+    '{{CSA_BULLET_2}}': safeFields.experience1Bullet2,
+    '{{CSA_BULLET_3}}': safeFields.experience1Bullet3,
+    '{{XL_BULLET_1}}': safeFields.experience2Bullet1,
+    '{{XL_BULLET_2}}': safeFields.experience2Bullet2,
+    '{{XL_BULLET_3}}': safeFields.experience2Bullet3,
+    '{{PORTFOLIO_BULLET_1}}': safeFields.project1Bullet1,
+    '{{PORTFOLIO_BULLET_2}}': safeFields.project2Bullet1,
+    '{{PORTFOLIO_BULLET_3}}': safeFields.project3Bullet1,
     '{{CERTIFICATIONS}}': safeFields.certifications,
     '{{CERTIFICATION_BULLET_1}}': safeFields.certificationBullet1,
     '{{CERTIFICATION_BULLET_2}}': safeFields.certificationBullet2,
@@ -383,13 +437,21 @@ export async function createCvGoogleDoc(input: GenerateCvDocInput): Promise<Gene
   if (dynamicCertificationReplacements === 0) {
     warnings.push('Template missing dynamic {{CERTIFICATIONS}} placeholder. Please update the Google Docs template.');
   }
-  ['{{PORTFOLIO_BULLET_2}}', '{{PORTFOLIO_BULLET_3}}'].forEach((placeholder) => {
+
+  const replacementCount = (placeholder: string) => {
     const replacementIndex = replacementEntries.findIndex(([entryPlaceholder]) => entryPlaceholder === placeholder);
-    const occurrencesChanged = replacementIndex >= 0
+    return replacementIndex >= 0
       ? docsResult?.replies?.[replacementIndex]?.replaceAllText?.occurrencesChanged ?? 0
       : 0;
-    if (occurrencesChanged === 0) {
-      warnings.push(`Template missing ${placeholder} placeholder. Add it under Project / Portfolio if you want multiple project bullets.`);
+  };
+
+  [
+    ['{{EXPERIENCE_1_BULLET_1}}', '{{CSA_BULLET_1}}'],
+    ['{{EXPERIENCE_2_BULLET_1}}', '{{XL_BULLET_1}}'],
+    ['{{PROJECT_1_BULLET_1}}', '{{PORTFOLIO_BULLET_1}}']
+  ].forEach((aliases) => {
+    if (aliases.reduce((sum, placeholder) => sum + replacementCount(placeholder), 0) === 0) {
+      warnings.push(`Template missing ${aliases.join(' or ')} placeholder.`);
     }
   });
 

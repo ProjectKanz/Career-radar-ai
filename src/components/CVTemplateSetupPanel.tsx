@@ -197,24 +197,41 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
             <div>
               <h3 className="text-base font-bold text-amber-900">Placeholder checklist</h3>
               <p className="mt-1 text-sm leading-relaxed text-amber-800">
-                V1 supports custom templates that already contain placeholders. Auto-converting an ordinary CV into a placeholder template is the next phase.
+                V1 supports custom templates that already contain placeholders. Use the generic placeholders below for new templates. Legacy Kemas placeholders are still supported for older templates.
               </p>
               <div className="mt-4 grid grid-cols-1 gap-2 text-xs font-mono text-amber-900 sm:grid-cols-2">
                 {[
                   '{{TARGET_TITLE}}',
                   '{{PROFESSIONAL_SUMMARY}}',
-                  '{{CSA_BULLET_1}}',
-                  '{{XL_BULLET_1}}',
-                  '{{PORTFOLIO_BULLET_1}}',
-                  '{{PORTFOLIO_BULLET_2}}',
-                  '{{PORTFOLIO_BULLET_3}}',
+                  '{{EXPERIENCE_1_TITLE}}',
+                  '{{EXPERIENCE_1_ORGANIZATION}}',
+                  '{{EXPERIENCE_1_DATE}}',
+                  '{{EXPERIENCE_1_BULLET_1}}',
+                  '{{EXPERIENCE_1_BULLET_2}}',
+                  '{{EXPERIENCE_1_BULLET_3}}',
+                  '{{EXPERIENCE_2_TITLE}}',
+                  '{{EXPERIENCE_2_ORGANIZATION}}',
+                  '{{EXPERIENCE_2_DATE}}',
+                  '{{EXPERIENCE_2_BULLET_1}}',
+                  '{{EXPERIENCE_2_BULLET_2}}',
+                  '{{EXPERIENCE_2_BULLET_3}}',
+                  '{{PROJECT_1_TITLE}}',
+                  '{{PROJECT_1_BULLET_1}}',
+                  '{{PROJECT_2_TITLE}}',
+                  '{{PROJECT_2_BULLET_1}}',
+                  '{{PROJECT_3_TITLE}}',
+                  '{{PROJECT_3_BULLET_1}}',
                   '{{CERTIFICATIONS}}',
+                  '{{ACHIEVEMENT_BULLET_1}}',
                   '{{HARD_SKILLS}}',
                   '{{SOFT_SKILLS}}'
                 ].map((item) => (
                   <div key={item} className="rounded-lg border border-amber-100 bg-white/70 px-3 py-2">{item}</div>
                 ))}
               </div>
+              <p className="mt-3 text-xs leading-relaxed text-amber-800">
+                Legacy aliases still work: <span className="font-mono">CSA_BULLET_*</span>, <span className="font-mono">XL_BULLET_*</span>, and <span className="font-mono">PORTFOLIO_BULLET_*</span>.
+              </p>
             </div>
           </div>
         </section>

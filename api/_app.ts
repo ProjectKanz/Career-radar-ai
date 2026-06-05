@@ -467,9 +467,8 @@ function recommendCvBaseVersion(roleDna: RoleDnaClassification, text: string): C
 
 function targetSectionForEvidence(evidence: CvEvidenceInput) {
   const text = lowerText(evidence.evidenceId, evidence.category, evidence.title, evidence.organization, evidence.description);
-  if (text.includes('csa') || text.includes('cahaya') || text.includes('material control') || text.includes('document controller')) return 'CSA bullet';
-  if (text.includes('xl') || text.includes('axiata') || text.includes('transaction') || text.includes('dashboard')) return 'XL bullet';
-  if (text.includes('portfolio') || text.includes('project') || text.includes('automation') || text.includes('ai workflow')) return 'Project/Portfolio';
+  if (text.includes('portfolio') || text.includes('project') || text.includes('automation') || text.includes('ai workflow')) return 'Project slot';
+  if (text.includes('intern') || text.includes('work') || text.includes('experience') || text.includes('operations') || text.includes('material control') || text.includes('document controller') || text.includes('dashboard') || text.includes('analyst')) return 'Experience slot';
   if (text.includes('cert') || text.includes('course') || text.includes('english') || text.includes('toefl') || text.includes('ielts')) return 'Certification';
   if (text.includes('achievement') || text.includes('competition') || text.includes('award') || text.includes('capital market')) return 'Achievement';
   return 'Skills / supporting evidence';
@@ -1166,15 +1165,24 @@ function buildCvTailoringFramework(input: {
 
 const cvFieldLimits: Record<string, number> = {
   professionalSummary: 85,
-  csaBullet1: 28,
-  csaBullet2: 28,
-  csaBullet3: 28,
-  xlBullet1: 28,
-  xlBullet2: 28,
-  xlBullet3: 28,
-  portfolioBullet1: 32,
-  portfolioBullet2: 32,
-  portfolioBullet3: 32,
+  experience1Title: 12,
+  experience1Organization: 12,
+  experience1Date: 10,
+  experience1Bullet1: 28,
+  experience1Bullet2: 28,
+  experience1Bullet3: 28,
+  experience2Title: 12,
+  experience2Organization: 12,
+  experience2Date: 10,
+  experience2Bullet1: 28,
+  experience2Bullet2: 28,
+  experience2Bullet3: 28,
+  project1Title: 12,
+  project1Bullet1: 32,
+  project2Title: 12,
+  project2Bullet1: 32,
+  project3Title: 12,
+  project3Bullet1: 32,
   certifications: 60,
   achievementBullet1: 22,
   achievementBullet2: 22,
@@ -1208,10 +1216,12 @@ function normalizeGeneratedCvFields(
 
     if (key === 'professionalSummary') {
       nextValue = limitWords(nextValue, 85);
-    } else if (key.startsWith('portfolioBullet')) {
+    } else if (key.startsWith('project') && key.includes('Bullet')) {
       nextValue = limitWords(nextValue, 32);
-    } else if (key.startsWith('csaBullet') || key.startsWith('xlBullet')) {
+    } else if (key.startsWith('experience') && key.includes('Bullet')) {
       nextValue = limitWords(nextValue, 28);
+    } else if (key.startsWith('experience') || key.startsWith('project')) {
+      nextValue = limitWords(nextValue, cvFieldLimits[key] || 12);
     } else if (key.startsWith('achievementBullet')) {
       nextValue = limitWords(nextValue, 22);
     } else if (key === 'hardSkills' || key === 'softSkills' || key === 'languages') {
@@ -1638,15 +1648,24 @@ You are a strict ATS CV tailoring assistant. Return structured JSON only.
 The user has an original ATS CV template. Do NOT create a new CV layout. Fill only these fixed template fields:
 - targetTitle
 - professionalSummary
-- csaBullet1
-- csaBullet2
-- csaBullet3
-- xlBullet1
-- xlBullet2
-- xlBullet3
-- portfolioBullet1
-- portfolioBullet2
-- portfolioBullet3
+- experience1Title
+- experience1Organization
+- experience1Date
+- experience1Bullet1
+- experience1Bullet2
+- experience1Bullet3
+- experience2Title
+- experience2Organization
+- experience2Date
+- experience2Bullet1
+- experience2Bullet2
+- experience2Bullet3
+- project1Title
+- project1Bullet1
+- project2Title
+- project2Bullet1
+- project3Title
+- project3Bullet1
 - certifications
 - certificationBullet1
 - certificationBullet2
@@ -1665,10 +1684,10 @@ Fixed final CV layout:
 3. PROFESSIONAL SUMMARY
 4. EDUCATION
 5. WORK EXPERIENCE
-   - PT Cahaya Sriwijaya Abadi
-   - PT XL Axiata Tbk
+   - Experience slot 1 from the strongest verified work evidence
+   - Experience slot 2 from the next strongest verified work/internship evidence
 6. PROJECT / PORTFOLIO
-   - AI productivity projects: AI Workflow Automation OS, CareerRadar AI, and Rumah Budget when supported by verified evidence
+   - Project slots from the strongest verified project/portfolio evidence
 7. CERTIFICATIONS
 8. ACHIEVEMENTS
 9. SKILLS & LANGUAGES
@@ -1680,6 +1699,7 @@ Rules:
 - Treat the application pack as supporting context only, not as the source of truth.
 - If a field cannot be supported by verified profile/evidence/checklist data, return exactly "${warning}".
 - Aim for a one-page CV. Summary must be 65-85 words maximum. Work bullets must be one sentence, 18-28 words. Each project bullet must be one sentence, 22-32 words.
+- Experience titles, organizations, and dates must be copied or safely summarized from verified evidence/profile only. Do not invent companies, roles, or dates.
 - Preferred certification output is certifications for the dynamic {{CERTIFICATIONS}} placeholder.
 - certifications must be one compact pipe-separated string built from Recommended certification dynamic section exactly.
 - certificationBullet1 through certificationBullet4 are legacy compatibility fields only. Fill them with the first four certification items, but do not limit certifications to four items.
@@ -1695,7 +1715,7 @@ Rules:
 - Follow certification priority when choosing certification and achievement emphasis.
 - If English/TOEFL is required and verified English score evidence exists, put it first in Certifications.
 - Move role alignment into professionalSummary or relevant work/project bullet.
-- Use portfolioBullet1 through portfolioBullet3 for the strongest verified project evidence. Prioritize AI productivity, agentic workflow, evidence grounding, reporting automation, budgeting analytics, and decision-support projects only when those facts are present.
+- Use project1 through project3 for the strongest verified project evidence when present. Do not add project names or AI productivity claims unless they exist in verified evidence.
 - Do not include application notes, cover-letter language, recruiter outreach, or explanation.
 - Do not include sections named Targeted Experience Highlights, Role Alignment, or Application Notes.
 - Tailor wording to the selected company and role while staying truthful.
@@ -1811,15 +1831,24 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
           properties: {
             targetTitle: { type: Type.STRING },
             professionalSummary: { type: Type.STRING },
-            csaBullet1: { type: Type.STRING },
-            csaBullet2: { type: Type.STRING },
-            csaBullet3: { type: Type.STRING },
-            xlBullet1: { type: Type.STRING },
-            xlBullet2: { type: Type.STRING },
-            xlBullet3: { type: Type.STRING },
-            portfolioBullet1: { type: Type.STRING },
-            portfolioBullet2: { type: Type.STRING },
-            portfolioBullet3: { type: Type.STRING },
+            experience1Title: { type: Type.STRING },
+            experience1Organization: { type: Type.STRING },
+            experience1Date: { type: Type.STRING },
+            experience1Bullet1: { type: Type.STRING },
+            experience1Bullet2: { type: Type.STRING },
+            experience1Bullet3: { type: Type.STRING },
+            experience2Title: { type: Type.STRING },
+            experience2Organization: { type: Type.STRING },
+            experience2Date: { type: Type.STRING },
+            experience2Bullet1: { type: Type.STRING },
+            experience2Bullet2: { type: Type.STRING },
+            experience2Bullet3: { type: Type.STRING },
+            project1Title: { type: Type.STRING },
+            project1Bullet1: { type: Type.STRING },
+            project2Title: { type: Type.STRING },
+            project2Bullet1: { type: Type.STRING },
+            project3Title: { type: Type.STRING },
+            project3Bullet1: { type: Type.STRING },
             certifications: { type: Type.STRING },
             certificationBullet1: { type: Type.STRING },
             certificationBullet2: { type: Type.STRING },
@@ -1835,15 +1864,24 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
           required: [
             'targetTitle',
             'professionalSummary',
-            'csaBullet1',
-            'csaBullet2',
-            'csaBullet3',
-            'xlBullet1',
-            'xlBullet2',
-            'xlBullet3',
-            'portfolioBullet1',
-            'portfolioBullet2',
-            'portfolioBullet3',
+            'experience1Title',
+            'experience1Organization',
+            'experience1Date',
+            'experience1Bullet1',
+            'experience1Bullet2',
+            'experience1Bullet3',
+            'experience2Title',
+            'experience2Organization',
+            'experience2Date',
+            'experience2Bullet1',
+            'experience2Bullet2',
+            'experience2Bullet3',
+            'project1Title',
+            'project1Bullet1',
+            'project2Title',
+            'project2Bullet1',
+            'project3Title',
+            'project3Bullet1',
             'certifications',
             'certificationBullet1',
             'certificationBullet2',
