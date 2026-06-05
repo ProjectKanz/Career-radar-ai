@@ -10,6 +10,8 @@ export interface CVTemplateFields {
   xlBullet2: string;
   xlBullet3: string;
   portfolioBullet1: string;
+  portfolioBullet2: string;
+  portfolioBullet3: string;
   certifications: string;
   certificationBullet1: string;
   certificationBullet2: string;
@@ -125,6 +127,8 @@ export function validateCvTemplateFields(input: Partial<CVTemplateFields>): CVTe
     xlBullet2: templateValue(input.xlBullet2),
     xlBullet3: templateValue(input.xlBullet3),
     portfolioBullet1: templateValue(input.portfolioBullet1),
+    portfolioBullet2: templateValue(input.portfolioBullet2),
+    portfolioBullet3: templateValue(input.portfolioBullet3),
     certifications: templateValue(input.certifications || legacyCertifications),
     certificationBullet1: templateValue(input.certificationBullet1),
     certificationBullet2: templateValue(input.certificationBullet2),
@@ -235,9 +239,11 @@ export function buildCvHtml(input: RenderCvInput) {
     </ul>
 
     <h2>Project / Portfolio</h2>
-    <h3>AI Workflow Automation OS</h3>
+    <h3>AI Productivity Projects</h3>
     <ul>
       ${bullet(fields.portfolioBullet1)}
+      ${bullet(fields.portfolioBullet2)}
+      ${bullet(fields.portfolioBullet3)}
     </ul>
 
     <h2>Certifications</h2>
@@ -274,6 +280,8 @@ function replacementMap(fields: CVTemplateFields) {
     '{{XL_BULLET_2}}': safeFields.xlBullet2,
     '{{XL_BULLET_3}}': safeFields.xlBullet3,
     '{{PORTFOLIO_BULLET_1}}': safeFields.portfolioBullet1,
+    '{{PORTFOLIO_BULLET_2}}': safeFields.portfolioBullet2,
+    '{{PORTFOLIO_BULLET_3}}': safeFields.portfolioBullet3,
     '{{CERTIFICATIONS}}': safeFields.certifications,
     '{{CERTIFICATION_BULLET_1}}': safeFields.certificationBullet1,
     '{{CERTIFICATION_BULLET_2}}': safeFields.certificationBullet2,
@@ -361,6 +369,15 @@ export async function createCvGoogleDoc(input: GenerateCvDocInput): Promise<Gene
   if (dynamicCertificationReplacements === 0) {
     warnings.push('Template missing dynamic {{CERTIFICATIONS}} placeholder. Please update the Google Docs template.');
   }
+  ['{{PORTFOLIO_BULLET_2}}', '{{PORTFOLIO_BULLET_3}}'].forEach((placeholder) => {
+    const replacementIndex = replacementEntries.findIndex(([entryPlaceholder]) => entryPlaceholder === placeholder);
+    const occurrencesChanged = replacementIndex >= 0
+      ? docsResult?.replies?.[replacementIndex]?.replaceAllText?.occurrencesChanged ?? 0
+      : 0;
+    if (occurrencesChanged === 0) {
+      warnings.push(`Template missing ${placeholder} placeholder. Add it under Project / Portfolio if you want multiple project bullets.`);
+    }
+  });
 
   return warnings.length ? { ...copiedDoc, warnings } : copiedDoc;
 }

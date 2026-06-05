@@ -24,3 +24,6 @@ firebase-debug.log
 # OS/editor files
 .vscode/
 .idea/
+
+# Temporary local git backups
+.git-empty-backup-*/

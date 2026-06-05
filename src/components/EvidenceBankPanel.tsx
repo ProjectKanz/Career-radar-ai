@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Award, Plus, Trash2, Edit2, ShieldCheck, X } from 'lucide-react';
+import { Award, Plus, Trash2, Edit2, ShieldCheck, X, Sparkles, ClipboardList } from 'lucide-react';
 import { collection, query, getDocsFromCache, getDocsFromServer, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db, formatFirestoreServerError, handleFirestoreError, OperationType } from '../firebase';
 import { CVEvidence } from '../types';
@@ -19,6 +19,30 @@ const CATEGORIES = [
 
 const evidencesCache = new Map<string, CVEvidence[]>();
 
+const ADVISOR_PROJECT_DRAFTS = [
+  {
+    evidenceId: 'PORT-001',
+    category: 'Side Project / Portfolio',
+    title: 'CareerRadar AI',
+    organization: 'Personal MVP Project',
+    description: 'Built an AI-assisted job-search operating system that parses job descriptions, classifies role DNA, ranks opportunities, and generates evidence-grounded CV tailoring checklists and application packs.\nSkill tags: AI workflow automation, Gemini API, React, Firebase, evidence grounding, ATS CV tailoring, job matching, decision support'
+  },
+  {
+    evidenceId: 'PORT-002',
+    category: 'Side Project / Portfolio',
+    title: 'Rumah Budget',
+    organization: 'Personal Finance Productivity Project',
+    description: 'Built a household budgeting and reporting workflow that tracks transactions, monitors category spending, and prepares scheduled budget summaries for better weekly financial decisions.\nSkill tags: personal finance analytics, scheduled reporting, workflow automation, transaction tracking, budget monitoring, dashboard thinking'
+  },
+  {
+    evidenceId: 'PORT-003',
+    category: 'Side Project / Portfolio',
+    title: 'AI Workflow Automation OS',
+    organization: 'Personal Productivity System',
+    description: 'Built a personal AI productivity system using structured evidence, Google Workspace workflows, Apps Script automation, and human-in-the-loop review to turn recurring job-search tasks into repeatable decision workflows.\nSkill tags: agentic workflow design, Google Sheets, Google Apps Script, Gemini AI, structured data extraction, weekly reporting, productivity automation'
+  }
+];
+
 function sortEvidences(items: CVEvidence[]) {
   return items.sort((a, b) => a.evidenceId.localeCompare(b.evidenceId, undefined, { numeric: true, sensitivity: 'base' }));
 }
@@ -29,6 +53,7 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [serverReadError, setServerReadError] = useState<string | null>(null);
+  const [advisorSaveStatus, setAdvisorSaveStatus] = useState<string | null>(null);
 
   // Form states
   const [evidenceId, setEvidenceId] = useState('');
@@ -146,6 +171,51 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
     setIsAdding(true);
   };
 
+  const handleUseAdvisorDraft = (item: typeof ADVISOR_PROJECT_DRAFTS[number]) => {
+    setEditingId(null);
+    setEvidenceId(item.evidenceId);
+    setCategory(item.category);
+    setTitle(item.title);
+    setOrganization(item.organization);
+    setDescription(item.description);
+    setIsVerified(true);
+    setIsAdding(true);
+    setAdvisorSaveStatus(null);
+  };
+
+  const handleSaveAdvisorProjectDrafts = async () => {
+    setAdvisorSaveStatus('Saving advisor project drafts...');
+    const now = new Date().toISOString();
+    const existingByEvidenceId = new Map<string, CVEvidence>(
+      evidences.map((item) => [item.evidenceId.toUpperCase(), item])
+    );
+
+    try {
+      await Promise.all(ADVISOR_PROJECT_DRAFTS.map(async (item) => {
+        const existing = existingByEvidenceId.get(item.evidenceId);
+        const docId = existing?.id || doc(collection(db, cvEvidencesPath)).id;
+        const payload: CVEvidence = {
+          evidenceId: item.evidenceId,
+          category: item.category,
+          title: item.title,
+          organization: item.organization,
+          description: item.description,
+          isVerified: true,
+          createdAt: existing?.createdAt || now,
+          updatedAt: now
+        };
+
+        await setDoc(doc(db, cvEvidencesPath, docId), payload);
+      }));
+
+      await fetchEvidences();
+      setAdvisorSaveStatus('Advisor project drafts saved. You can edit each card before using it in CV generation.');
+    } catch (err) {
+      console.error('Advisor project draft save failed:', err);
+      setAdvisorSaveStatus(formatFirestoreServerError(err));
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this evidence record?')) return;
     const itemPath = `${cvEvidencesPath}/${id}`;
@@ -199,6 +269,57 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
           <div className="mt-1">{serverReadError}</div>
         </div>
       )}
+
+      <div className="mb-8 rounded-2xl border border-emerald-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>Career advisor project drafts</span>
+            </div>
+            <h3 className="mt-3 text-lg font-bold text-slate-900">CV-ready portfolio entries to strengthen your AI productivity story</h3>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-500">
+              Use these as editable evidence records for the project section: CareerRadar AI, Rumah Budget, and your AI Workflow Automation OS.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleSaveAdvisorProjectDrafts}
+            className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-700"
+          >
+            <ClipboardList className="mr-1.5 h-4 w-4" />
+            <span>Save all drafts</span>
+          </button>
+        </div>
+
+        {advisorSaveStatus && (
+          <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs font-semibold text-emerald-800">
+            {advisorSaveStatus}
+          </div>
+        )}
+
+        <div className="mt-5 grid grid-cols-1 gap-3 lg:grid-cols-3">
+          {ADVISOR_PROJECT_DRAFTS.map((item) => (
+            <div key={item.evidenceId} className="rounded-xl border border-slate-100 bg-slate-50/40 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-xs font-bold tracking-wider text-emerald-700">
+                  {item.evidenceId}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleUseAdvisorDraft(item)}
+                  className="text-xs font-bold text-emerald-700 hover:text-emerald-900"
+                >
+                  Edit draft
+                </button>
+              </div>
+              <h4 className="mt-3 text-sm font-bold text-slate-900">{item.title}</h4>
+              <p className="mt-0.5 text-xs font-semibold text-slate-400">{item.organization}</p>
+              <p className="mt-3 text-xs leading-relaxed text-slate-600 whitespace-pre-line">{item.description}</p>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* Adding / Editing Modal or inline form */}
       {isAdding && (

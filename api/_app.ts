@@ -1151,6 +1151,8 @@ const cvFieldLimits: Record<string, number> = {
   xlBullet2: 28,
   xlBullet3: 28,
   portfolioBullet1: 32,
+  portfolioBullet2: 32,
+  portfolioBullet3: 32,
   certifications: 60,
   achievementBullet1: 22,
   achievementBullet2: 22,
@@ -1184,7 +1186,7 @@ function normalizeGeneratedCvFields(
 
     if (key === 'professionalSummary') {
       nextValue = limitWords(nextValue, 85);
-    } else if (key === 'portfolioBullet1') {
+    } else if (key.startsWith('portfolioBullet')) {
       nextValue = limitWords(nextValue, 32);
     } else if (key.startsWith('csaBullet') || key.startsWith('xlBullet')) {
       nextValue = limitWords(nextValue, 28);
@@ -1621,6 +1623,8 @@ The user has an original ATS CV template. Do NOT create a new CV layout. Fill on
 - xlBullet2
 - xlBullet3
 - portfolioBullet1
+- portfolioBullet2
+- portfolioBullet3
 - certifications
 - certificationBullet1
 - certificationBullet2
@@ -1642,7 +1646,7 @@ Fixed final CV layout:
    - PT Cahaya Sriwijaya Abadi
    - PT XL Axiata Tbk
 6. PROJECT / PORTFOLIO
-   - AI Workflow Automation OS
+   - AI productivity projects: AI Workflow Automation OS, CareerRadar AI, and Rumah Budget when supported by verified evidence
 7. CERTIFICATIONS
 8. ACHIEVEMENTS
 9. SKILLS & LANGUAGES
@@ -1653,7 +1657,7 @@ Rules:
 - Do not freely rewrite the CV from scratch. Build the placeholders from the reusable CV tailoring framework, evidence-to-role mapping, and ready-to-copy checklist rows.
 - Treat the application pack as supporting context only, not as the source of truth.
 - If a field cannot be supported by verified profile/evidence/checklist data, return exactly "${warning}".
-- Aim for a one-page CV. Summary must be 65-85 words maximum. Work bullets must be one sentence, 18-28 words. Project bullet must be one sentence, 22-32 words.
+- Aim for a one-page CV. Summary must be 65-85 words maximum. Work bullets must be one sentence, 18-28 words. Each project bullet must be one sentence, 22-32 words.
 - Preferred certification output is certifications for the dynamic {{CERTIFICATIONS}} placeholder.
 - certifications must be one compact pipe-separated string built from Recommended certification dynamic section exactly.
 - certificationBullet1 through certificationBullet4 are legacy compatibility fields only. Fill them with the first four certification items, but do not limit certifications to four items.
@@ -1669,6 +1673,7 @@ Rules:
 - Follow certification priority when choosing certification and achievement emphasis.
 - If English/TOEFL is required and verified English score evidence exists, put it first in Certifications.
 - Move role alignment into professionalSummary or relevant work/project bullet.
+- Use portfolioBullet1 through portfolioBullet3 for the strongest verified project evidence. Prioritize AI productivity, agentic workflow, evidence grounding, reporting automation, budgeting analytics, and decision-support projects only when those facts are present.
 - Do not include application notes, cover-letter language, recruiter outreach, or explanation.
 - Do not include sections named Targeted Experience Highlights, Role Alignment, or Application Notes.
 - Tailor wording to the selected company and role while staying truthful.
@@ -1790,6 +1795,8 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
             xlBullet2: { type: Type.STRING },
             xlBullet3: { type: Type.STRING },
             portfolioBullet1: { type: Type.STRING },
+            portfolioBullet2: { type: Type.STRING },
+            portfolioBullet3: { type: Type.STRING },
             certifications: { type: Type.STRING },
             certificationBullet1: { type: Type.STRING },
             certificationBullet2: { type: Type.STRING },
@@ -1812,6 +1819,8 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
             'xlBullet2',
             'xlBullet3',
             'portfolioBullet1',
+            'portfolioBullet2',
+            'portfolioBullet3',
             'certifications',
             'certificationBullet1',
             'certificationBullet2',
