@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import { Radar, ShieldCheck, FileText, CheckSquare, Sparkles } from 'lucide-react';
+import { Radar, ShieldCheck, FileText, CheckSquare, Sparkles, KeyRound } from 'lucide-react';
 import { loginWithGoogle, loginWithGoogleRedirect } from '../firebase';
 
 interface AuthScreenProps {
@@ -48,7 +48,7 @@ export default function AuthScreen({ onLoginSuccess, loading, setLoading }: Auth
           </div>
           <span className="text-xl font-bold text-slate-800 tracking-tight">CareerRadar AI</span>
         </div>
-        <div className="text-xs text-slate-400 font-mono">v1.1 (Firebase Sync Edition)</div>
+        <div className="text-xs text-slate-400 font-mono">Public BYOK Demo</div>
       </div>
 
       {/* Main Hero Card */}
@@ -61,14 +61,14 @@ export default function AuthScreen({ onLoginSuccess, loading, setLoading }: Auth
         >
           <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 mb-6">
             <Sparkles className="h-3.5 w-3.5" />
-            <span>AI-Driven Resume Matcher</span>
+            <span>BYOK AI Resume Matcher</span>
           </div>
 
           <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-3">
-            Match Your True Talents
+            Match Jobs Against Real CV Evidence
           </h2>
           <p className="text-sm text-slate-500 mb-8 max-w-sm mx-auto">
-            Securely map opportunities, parse complex job technical DNA, and tailor your CV suggestions with full academic & project grounding.
+            Paste a job post, compare it with verified profile evidence, preview AI cost, and generate tailored CV drafts into your own Google Drive.
           </p>
 
           {/* Core Feature List */}
@@ -89,6 +89,17 @@ export default function AuthScreen({ onLoginSuccess, loading, setLoading }: Auth
               <CheckSquare className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
               <div className="text-sm font-medium">Actionable tailoring checklist</div>
             </div>
+            <div className="flex items-start space-x-3 text-slate-600">
+              <KeyRound className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="text-sm font-medium">Use Dry Run or your own Gemini API key</div>
+            </div>
+          </div>
+
+          <div className="mb-8 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-left">
+            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Safe public demo</div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+              Try the workflow with Dry Run for free. Real AI generation requires your own Gemini API key in AI Settings, so visitor usage does not consume the project owner's quota.
+            </p>
           </div>
 
           {/* Social Auth Trigger */}
