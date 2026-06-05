@@ -11,6 +11,8 @@ export interface Profile {
   salaryTargetMin?: number;
   salaryTargetMax?: number;
   portfolioWording?: string;
+  cvTemplateDocumentId?: string;
+  cvTemplateSourceUrl?: string;
   updatedAt: string;
 }
 

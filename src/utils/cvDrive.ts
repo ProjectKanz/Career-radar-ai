@@ -109,6 +109,19 @@ export function extractDriveFolderId(input: string) {
   return raw;
 }
 
+export function extractGoogleDocId(input: string) {
+  const raw = input.trim();
+  if (!raw) return '';
+
+  const docMatch = raw.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+  if (docMatch) return docMatch[1];
+
+  const queryMatch = raw.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (queryMatch) return queryMatch[1];
+
+  return raw;
+}
+
 export function validateCvTemplateFields(input: Partial<CVTemplateFields>): CVTemplateFields {
   const legacyCertifications = [
     input.certificationBullet1,
@@ -308,6 +321,7 @@ async function googleApiError(response: Response, prefix: string) {
 export async function createCvGoogleDoc(input: GenerateCvDocInput): Promise<GeneratedDriveDoc> {
   const name = `CV - ${safeFilePart(input.profile.fullName)} - ATS - ${safeFilePart(input.opportunity.company)} - ${safeFilePart(input.opportunity.role)}`;
   const metadata: Record<string, unknown> = { name };
+  const templateDocumentId = input.profile.cvTemplateDocumentId || CV_TEMPLATE_DOCUMENT_ID;
 
   if (input.folderId) {
     metadata.parents = [input.folderId];
@@ -315,7 +329,7 @@ export async function createCvGoogleDoc(input: GenerateCvDocInput): Promise<Gene
 
   input.onProgress?.('copying_template');
   const copyResponse = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${CV_TEMPLATE_DOCUMENT_ID}/copy?fields=id,name,webViewLink`,
+    `https://www.googleapis.com/drive/v3/files/${templateDocumentId}/copy?fields=id,name,webViewLink`,
     {
       method: 'POST',
       headers: {

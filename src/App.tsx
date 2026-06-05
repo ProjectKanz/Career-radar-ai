@@ -3,7 +3,7 @@ import { onAuthStateChanged, getRedirectResult, User as FirebaseUser } from 'fir
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Radar, User, Award, CheckSquare, Briefcase, Calendar, 
-  LogOut, Database, Activity, KeyRound
+  LogOut, Database, Activity, KeyRound, FileText
 } from 'lucide-react';
 
 import { auth, getFirestoreDiagnostics, logout, testConnection } from './firebase';
@@ -13,13 +13,14 @@ import EvidenceBankPanel from './components/EvidenceBankPanel';
 import CareerRadarPanel from './components/CareerRadarPanel';
 import OpportunitiesPanel from './components/OpportunitiesPanel';
 import CVChecklistPanel from './components/CVChecklistPanel';
+import CVTemplateSetupPanel from './components/CVTemplateSetupPanel';
 import DailyBriefPanel from './components/DailyBriefPanel';
 import LegacyImportPanel from './components/LegacyImportPanel';
 import AIUsageLogPanel from './components/AIUsageLogPanel';
 import AISettingsPanel from './components/AISettingsPanel';
 import FirestoreDiagnosticsPanel from './components/FirestoreDiagnosticsPanel';
 
-type ActiveTab = 'radar' | 'profile' | 'evidence' | 'opportunities' | 'checklist' | 'pipeline' | 'legacy-import' | 'ai-usage' | 'ai-settings';
+type ActiveTab = 'radar' | 'profile' | 'evidence' | 'opportunities' | 'checklist' | 'cv-template' | 'pipeline' | 'legacy-import' | 'ai-usage' | 'ai-settings';
 
 let authenticatedConnectionTestScheduled = false;
 let redirectResultChecked = false;
@@ -210,6 +211,18 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => { setActiveTab('cv-template'); setMenuOpen(false); }}
+            className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'cv-template' 
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/10' 
+                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            }`}
+          >
+            <FileText className="h-4 w-4 shrink-0" />
+            <span>CV Template Setup</span>
+          </button>
+
+          <button
             onClick={() => { setActiveTab('pipeline'); setMenuOpen(false); }}
             className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               activeTab === 'pipeline' 
@@ -305,6 +318,7 @@ export default function App() {
             {activeTab === 'evidence' && <EvidenceBankPanel userId={user.uid} />}
             {activeTab === 'opportunities' && <OpportunitiesPanel userId={user.uid} refreshToken={dataRefreshToken} />}
             {activeTab === 'checklist' && <CVChecklistPanel userId={user.uid} refreshToken={dataRefreshToken} />}
+            {activeTab === 'cv-template' && <CVTemplateSetupPanel userId={user.uid} />}
             {activeTab === 'pipeline' && <DailyBriefPanel userId={user.uid} refreshToken={dataRefreshToken} />}
             {activeTab === 'legacy-import' && <LegacyImportPanel userId={user.uid} />}
             {activeTab === 'ai-usage' && <AIUsageLogPanel />}
