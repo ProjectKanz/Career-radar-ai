@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import { GoogleGenAI, Type } from '@google/genai';
 import rateLimit from 'express-rate-limit';
 
@@ -1271,6 +1272,252 @@ app.get('/api/ai-cost-config', (req, res) => {
   });
 });
 
+type CvSourceType = 'google_docs' | 'pdf' | 'docx';
+const MAX_CV_UPLOAD_BYTES = Number(process.env.MAX_CV_UPLOAD_BYTES || 4 * 1024 * 1024);
+const MAX_CV_TEXT_CHARS = Number(process.env.MAX_CV_TEXT_CHARS || 22000);
+
+function normalizeExtractedText(value: unknown) {
+  return String(value || '')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, MAX_CV_TEXT_CHARS);
+}
+
+function stripXml(value: string) {
+  return value
+    .replace(/<w:tab\/>/g, '\t')
+    .replace(/<\/w:p>/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function extractDocxText(buffer: Buffer) {
+  const eocdSignature = 0x06054b50;
+  let eocdOffset = -1;
+  for (let index = buffer.length - 22; index >= Math.max(0, buffer.length - 66000); index -= 1) {
+    if (buffer.readUInt32LE(index) === eocdSignature) {
+      eocdOffset = index;
+      break;
+    }
+  }
+  if (eocdOffset < 0) throw new Error('DOCX parser could not find ZIP directory.');
+
+  const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+  let offset = centralDirectoryOffset;
+  const end = centralDirectoryOffset + centralDirectorySize;
+
+  while (offset < end) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) break;
+    const compressionMethod = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.slice(offset + 46, offset + 46 + fileNameLength).toString('utf8');
+
+    if (fileName === 'word/document.xml') {
+      const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+      const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+      const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+      const compressed = buffer.slice(dataStart, dataStart + compressedSize);
+      const xmlBuffer = compressionMethod === 8
+        ? zlib.inflateRawSync(compressed)
+        : compressionMethod === 0
+          ? compressed
+          : Buffer.alloc(uncompressedSize);
+      return normalizeExtractedText(stripXml(xmlBuffer.toString('utf8')));
+    }
+
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+
+  throw new Error('DOCX parser could not find word/document.xml.');
+}
+
+function extractPdfText(buffer: Buffer) {
+  const latin = buffer.toString('latin1');
+  const strings = Array.from(latin.matchAll(/\(([^()]{2,300})\)/g))
+    .map((match) => match[1])
+    .join('\n');
+  const readableRuns = latin
+    .replace(/[^\x20-\x7E\n\r\t]+/g, ' ')
+    .split(/\s{2,}/)
+    .filter((item) => /[A-Za-z]{3,}/.test(item) && item.length < 500)
+    .join('\n');
+  const text = normalizeExtractedText(`${strings}\n${readableRuns}`);
+  if (text.length < 80) {
+    throw new Error('PDF text could not be extracted. Try exporting the CV to DOCX or Google Docs.');
+  }
+  return text;
+}
+
+function extractGoogleDocText(document: Record<string, unknown>) {
+  const body = document.body as { content?: unknown[] } | undefined;
+  const parts: string[] = [];
+  (body?.content || []).forEach((block) => {
+    const paragraph = (block as { paragraph?: { elements?: unknown[] } }).paragraph;
+    paragraph?.elements?.forEach((element) => {
+      const textRun = (element as { textRun?: { content?: string } }).textRun;
+      if (textRun?.content) parts.push(textRun.content);
+    });
+  });
+  return normalizeExtractedText(parts.join(''));
+}
+
+async function googleFetchJson(url: string, accessToken: string, init: RequestInit = {}) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      ...(init.headers || {})
+    }
+  });
+  if (!response.ok) {
+    const message = await response.text().catch(() => '');
+    throw new Error(`Google API request failed (${response.status}): ${message || response.statusText}`);
+  }
+  return response.json();
+}
+
+function placeholderTemplateText(fields: Record<string, string>, sourceName: string) {
+  const fullName = fields.fullName || '[Candidate Name]';
+  return `${fullName}
+{{TARGET_TITLE}}
+{{PROFESSIONAL_SUMMARY}}
+
+EDUCATION
+{{EDUCATION}}
+
+WORK EXPERIENCE
+{{EXPERIENCE_1_TITLE}} - {{EXPERIENCE_1_ORGANIZATION}}
+{{EXPERIENCE_1_DATE}}
+- {{EXPERIENCE_1_BULLET_1}}
+- {{EXPERIENCE_1_BULLET_2}}
+- {{EXPERIENCE_1_BULLET_3}}
+
+{{EXPERIENCE_2_TITLE}} - {{EXPERIENCE_2_ORGANIZATION}}
+{{EXPERIENCE_2_DATE}}
+- {{EXPERIENCE_2_BULLET_1}}
+- {{EXPERIENCE_2_BULLET_2}}
+- {{EXPERIENCE_2_BULLET_3}}
+
+PROJECT / PORTFOLIO
+{{PROJECT_1_TITLE}}
+- {{PROJECT_1_BULLET_1}}
+
+{{PROJECT_2_TITLE}}
+- {{PROJECT_2_BULLET_1}}
+
+{{PROJECT_3_TITLE}}
+- {{PROJECT_3_BULLET_1}}
+
+CERTIFICATIONS
+{{CERTIFICATIONS}}
+
+ACHIEVEMENTS
+- {{ACHIEVEMENT_BULLET_1}}
+- {{ACHIEVEMENT_BULLET_2}}
+- {{ACHIEVEMENT_BULLET_3}}
+
+SKILLS & LANGUAGES
+Hard Skills: {{HARD_SKILLS}}
+Soft Skills: {{SOFT_SKILLS}}
+Languages: {{LANGUAGES}}
+
+Source: ${sourceName || 'CareerRadar CV onboarding'}`;
+}
+
+function onboardingSchema() {
+  const evidenceDraft = {
+    type: Type.OBJECT,
+    properties: {
+      category: { type: Type.STRING },
+      title: { type: Type.STRING },
+      organization: { type: Type.STRING },
+      description: { type: Type.STRING },
+      sourceSection: { type: Type.STRING },
+      confidence: { type: Type.NUMBER },
+      inferredSkillTags: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING }
+      }
+    },
+    required: ['category', 'title', 'organization', 'description', 'sourceSection', 'confidence', 'inferredSkillTags']
+  };
+
+  return {
+    type: Type.OBJECT,
+    properties: {
+      profileDraft: {
+        type: Type.OBJECT,
+        properties: {
+          fullName: { type: Type.STRING },
+          education: { type: Type.STRING },
+          professionalSummary: { type: Type.STRING },
+          hardSkills: { type: Type.STRING },
+          softSkills: { type: Type.STRING },
+          languages: { type: Type.STRING }
+        },
+        required: ['fullName', 'education', 'professionalSummary', 'hardSkills', 'softSkills', 'languages']
+      },
+      templateFields: {
+        type: Type.OBJECT,
+        properties: {
+          fullName: { type: Type.STRING },
+          targetTitle: { type: Type.STRING },
+          professionalSummary: { type: Type.STRING },
+          education: { type: Type.STRING },
+          experience1Title: { type: Type.STRING },
+          experience1Organization: { type: Type.STRING },
+          experience1Date: { type: Type.STRING },
+          experience1Bullet1: { type: Type.STRING },
+          experience1Bullet2: { type: Type.STRING },
+          experience1Bullet3: { type: Type.STRING },
+          experience2Title: { type: Type.STRING },
+          experience2Organization: { type: Type.STRING },
+          experience2Date: { type: Type.STRING },
+          experience2Bullet1: { type: Type.STRING },
+          experience2Bullet2: { type: Type.STRING },
+          experience2Bullet3: { type: Type.STRING },
+          project1Title: { type: Type.STRING },
+          project1Bullet1: { type: Type.STRING },
+          project2Title: { type: Type.STRING },
+          project2Bullet1: { type: Type.STRING },
+          project3Title: { type: Type.STRING },
+          project3Bullet1: { type: Type.STRING },
+          certifications: { type: Type.STRING },
+          achievementBullet1: { type: Type.STRING },
+          achievementBullet2: { type: Type.STRING },
+          achievementBullet3: { type: Type.STRING },
+          hardSkills: { type: Type.STRING },
+          softSkills: { type: Type.STRING },
+          languages: { type: Type.STRING }
+        },
+        required: ['fullName', 'targetTitle', 'professionalSummary', 'education', 'experience1Title', 'experience1Organization', 'experience1Date', 'experience1Bullet1', 'experience1Bullet2', 'experience1Bullet3', 'experience2Title', 'experience2Organization', 'experience2Date', 'experience2Bullet1', 'experience2Bullet2', 'experience2Bullet3', 'project1Title', 'project1Bullet1', 'project2Title', 'project2Bullet1', 'project3Title', 'project3Bullet1', 'certifications', 'achievementBullet1', 'achievementBullet2', 'achievementBullet3', 'hardSkills', 'softSkills', 'languages']
+      },
+      evidenceDrafts: {
+        type: Type.ARRAY,
+        items: evidenceDraft
+      },
+      mappingWarnings: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING }
+      }
+    },
+    required: ['profileDraft', 'templateFields', 'evidenceDrafts', 'mappingWarnings']
+  };
+}
+
 // Cost Protection Rate Limiter: Max 3 requests per minute per IP for cost-intensive matching
 const analyzeLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -1279,6 +1526,272 @@ const analyzeLimiter = rateLimit({
   legacyHeaders: false, // Turn off X-RateLimit legacy headers
   message: {
     error: 'Batas kuota terlampaui. Anda hanya dapat melakukan analisis lowongan maksimal 3 kali per menit untuk mengamankan kuota gratis Anda.'
+  }
+});
+
+app.post('/api/parse-cv-source', analyzeLimiter, async (req, res) => {
+  try {
+    const {
+      sourceType,
+      accessToken,
+      googleDocUrl,
+      documentId,
+      fileName,
+      mimeType,
+      fileBase64
+    } = req.body || {};
+    const resolvedSourceType = sourceType as CvSourceType;
+
+    if (resolvedSourceType === 'google_docs') {
+      const docId = String(documentId || googleDocUrl || '').match(/\/document\/d\/([a-zA-Z0-9_-]+)/)?.[1]
+        || String(documentId || googleDocUrl || '').match(/[?&]id=([a-zA-Z0-9_-]+)/)?.[1]
+        || String(documentId || googleDocUrl || '').trim();
+      if (!accessToken || !docId) {
+        res.status(400).json({ error: 'Google Docs source requires Drive/Docs access and a document link.' });
+        return;
+      }
+      const document = await googleFetchJson(`https://docs.googleapis.com/v1/documents/${docId}`, accessToken);
+      const parsedText = extractGoogleDocText(document);
+      if (!parsedText) throw new Error('No readable text found in Google Docs CV.');
+      res.json({
+        sourceType: resolvedSourceType,
+        sourceName: document.title || fileName || 'Google Docs CV',
+        sourceDocumentId: docId,
+        parsedText,
+        parsedTextCharacterCount: parsedText.length,
+        warnings: []
+      });
+      return;
+    }
+
+    if (resolvedSourceType === 'pdf' || resolvedSourceType === 'docx') {
+      if (!fileBase64) {
+        res.status(400).json({ error: 'Uploaded CV file payload is required.' });
+        return;
+      }
+      const buffer = Buffer.from(String(fileBase64), 'base64');
+      if (buffer.length > MAX_CV_UPLOAD_BYTES) {
+        res.status(400).json({ error: `CV file is too large. Max ${Math.round(MAX_CV_UPLOAD_BYTES / 1024 / 1024)}MB.` });
+        return;
+      }
+      const parsedText = resolvedSourceType === 'docx'
+        ? extractDocxText(buffer)
+        : extractPdfText(buffer);
+      res.json({
+        sourceType: resolvedSourceType,
+        sourceName: fileName || (resolvedSourceType === 'pdf' ? 'Uploaded CV.pdf' : 'Uploaded CV.docx'),
+        mimeType: mimeType || '',
+        parsedText,
+        parsedTextCharacterCount: parsedText.length,
+        warnings: resolvedSourceType === 'pdf'
+          ? ['PDF extraction is best-effort. If text looks incomplete, use DOCX or Google Docs.']
+          : []
+      });
+      return;
+    }
+
+    res.status(400).json({ error: 'Unsupported CV source type.' });
+  } catch (error) {
+    console.error('CV source parse error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post('/api/generate-cv-onboarding', analyzeLimiter, async (req, res) => {
+  const startedAt = Date.now();
+  let inputCharacterCount = JSON.stringify(req.body || {}).length;
+
+  try {
+    const { parsedText, sourceName } = req.body || {};
+    const text = normalizeExtractedText(parsedText);
+    if (text.length < 80) {
+      res.status(400).json({ error: 'CV text is too short to analyze. Try another file or Google Docs source.' });
+      return;
+    }
+
+    const prompt = `
+You are a strict CV onboarding parser for CareerRadar AI. Return JSON only.
+
+Task:
+- Convert the user's existing CV text into generic CareerRadar placeholders.
+- Extract evidence suggestions as DRAFTS for user review.
+- Do not invent facts, metrics, dates, employers, education, certifications, or skills.
+- If a value is missing or unclear, return "[Needs verified input]".
+- Evidence drafts must be based only on text present in the CV.
+- Evidence drafts are not verified. Use conservative wording and confidence 0-1.
+- Evidence draft category must be one of: Work Achievement, Academic Honor, Side Project / Portfolio, Certification, Hard Skill / Technical Fact, Other Highlight.
+
+Source name: ${sourceName || 'Uploaded CV'}
+
+Generic placeholder rules:
+- Use experience1/experience2 for strongest work or internship items.
+- Use project1/project2/project3 for strongest project or portfolio items.
+- Keep bullets one sentence and concise.
+- Certifications must contain only real certificates, courses, licenses, or language scores.
+- Achievements contain awards, competitions, and measurable extracurricular outcomes.
+
+CV text:
+${text}
+`;
+    inputCharacterCount = prompt.length;
+    assertCostGuard(inputCharacterCount, { allowInputOverride: true });
+    const ai = getGenAIClient(getRequestGeminiApiKey(req));
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: onboardingSchema()
+      }
+    });
+
+    const parsedData = JSON.parse(response.text || '{}');
+    const outputCharacterCount = response.text?.length || JSON.stringify(parsedData).length;
+    recordAiUsage({
+      featureName: 'Generate CV Onboarding',
+      endpointName: '/api/generate-cv-onboarding',
+      model: GEMINI_MODEL,
+      inputCharacterCount,
+      outputCharacterCount,
+      durationMs: Date.now() - startedAt,
+      cacheStatus: 'miss',
+      ...tokenUsageFromResponse(response, inputCharacterCount, outputCharacterCount),
+      status: 'success'
+    });
+    res.json(parsedData);
+  } catch (error) {
+    console.error('CV onboarding generation error:', error);
+    recordAiUsage({
+      featureName: 'Generate CV Onboarding',
+      endpointName: '/api/generate-cv-onboarding',
+      model: GEMINI_MODEL,
+      inputCharacterCount,
+      outputCharacterCount: 0,
+      estimatedInputTokens: estimateTokensFromChars(inputCharacterCount),
+      estimatedOutputTokens: 0,
+      estimatedTotalTokens: estimateTokensFromChars(inputCharacterCount),
+      tokenCountSource: 'estimated',
+      durationMs: Date.now() - startedAt,
+      cacheStatus: 'blocked',
+      status: 'error',
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+function sourceValuePlaceholderPairs(templateFields: Record<string, string>) {
+  const pairs: [string, string][] = [
+    [templateFields.targetTitle, '{{TARGET_TITLE}}'],
+    [templateFields.professionalSummary, '{{PROFESSIONAL_SUMMARY}}'],
+    [templateFields.education, '{{EDUCATION}}'],
+    [templateFields.experience1Title, '{{EXPERIENCE_1_TITLE}}'],
+    [templateFields.experience1Organization, '{{EXPERIENCE_1_ORGANIZATION}}'],
+    [templateFields.experience1Date, '{{EXPERIENCE_1_DATE}}'],
+    [templateFields.experience1Bullet1, '{{EXPERIENCE_1_BULLET_1}}'],
+    [templateFields.experience1Bullet2, '{{EXPERIENCE_1_BULLET_2}}'],
+    [templateFields.experience1Bullet3, '{{EXPERIENCE_1_BULLET_3}}'],
+    [templateFields.experience2Title, '{{EXPERIENCE_2_TITLE}}'],
+    [templateFields.experience2Organization, '{{EXPERIENCE_2_ORGANIZATION}}'],
+    [templateFields.experience2Date, '{{EXPERIENCE_2_DATE}}'],
+    [templateFields.experience2Bullet1, '{{EXPERIENCE_2_BULLET_1}}'],
+    [templateFields.experience2Bullet2, '{{EXPERIENCE_2_BULLET_2}}'],
+    [templateFields.experience2Bullet3, '{{EXPERIENCE_2_BULLET_3}}'],
+    [templateFields.project1Title, '{{PROJECT_1_TITLE}}'],
+    [templateFields.project1Bullet1, '{{PROJECT_1_BULLET_1}}'],
+    [templateFields.project2Title, '{{PROJECT_2_TITLE}}'],
+    [templateFields.project2Bullet1, '{{PROJECT_2_BULLET_1}}'],
+    [templateFields.project3Title, '{{PROJECT_3_TITLE}}'],
+    [templateFields.project3Bullet1, '{{PROJECT_3_BULLET_1}}'],
+    [templateFields.certifications, '{{CERTIFICATIONS}}'],
+    [templateFields.achievementBullet1, '{{ACHIEVEMENT_BULLET_1}}'],
+    [templateFields.achievementBullet2, '{{ACHIEVEMENT_BULLET_2}}'],
+    [templateFields.achievementBullet3, '{{ACHIEVEMENT_BULLET_3}}'],
+    [templateFields.hardSkills, '{{HARD_SKILLS}}'],
+    [templateFields.softSkills, '{{SOFT_SKILLS}}'],
+    [templateFields.languages, '{{LANGUAGES}}']
+  ];
+  const seen = new Set<string>();
+  return pairs
+    .map(([value, placeholder]) => [String(value || '').trim(), placeholder] as [string, string])
+    .filter(([value]) => value && value !== '[Needs verified input]' && value.length >= 8)
+    .sort((a, b) => b[0].length - a[0].length)
+    .filter(([value]) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+app.post('/api/create-placeholder-template', analyzeLimiter, async (req, res) => {
+  try {
+    const { accessToken, sourceType, sourceDocumentId, sourceName, templateFields } = req.body || {};
+    if (!accessToken || !templateFields) {
+      res.status(400).json({ error: 'Google Drive access and template fields are required.' });
+      return;
+    }
+
+    let documentId = '';
+    let name = `CareerRadar Placeholder Template - ${sourceName || 'CV'}`;
+    let webViewLink = '';
+
+    if (sourceType === 'google_docs' && sourceDocumentId) {
+      const copied = await googleFetchJson(
+        `https://www.googleapis.com/drive/v3/files/${sourceDocumentId}/copy?fields=id,name,webViewLink`,
+        accessToken,
+        {
+          method: 'POST',
+          body: JSON.stringify({ name })
+        }
+      ) as { id: string; name: string; webViewLink?: string };
+      documentId = copied.id;
+      name = copied.name;
+      webViewLink = copied.webViewLink || `https://docs.google.com/document/d/${documentId}/edit`;
+
+      const pairs = sourceValuePlaceholderPairs(templateFields);
+      if (pairs.length > 0) {
+        await googleFetchJson(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, accessToken, {
+          method: 'POST',
+          body: JSON.stringify({
+            requests: pairs.map(([text, placeholder]) => ({
+              replaceAllText: {
+                containsText: { text, matchCase: false },
+                replaceText: placeholder
+              }
+            }))
+          })
+        });
+      }
+    } else {
+      const created = await googleFetchJson('https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink', accessToken, {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          mimeType: 'application/vnd.google-apps.document'
+        })
+      }) as { id: string; name: string; webViewLink?: string };
+      documentId = created.id;
+      name = created.name;
+      webViewLink = created.webViewLink || `https://docs.google.com/document/d/${documentId}/edit`;
+
+      await googleFetchJson(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, accessToken, {
+        method: 'POST',
+        body: JSON.stringify({
+          requests: [{
+            insertText: {
+              location: { index: 1 },
+              text: placeholderTemplateText(templateFields, sourceName || '')
+            }
+          }]
+        })
+      });
+    }
+
+    res.json({ id: documentId, name, webViewLink });
+  } catch (error) {
+    console.error('Create placeholder template error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
 
