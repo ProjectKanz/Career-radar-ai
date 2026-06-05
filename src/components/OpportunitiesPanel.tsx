@@ -4,6 +4,7 @@ import { collection, query, getDocsFromCache, getDocsFromServer, doc, deleteDoc,
 import { db, formatFirestoreServerError, handleFirestoreError, OperationType, requestGoogleDriveAccessToken } from '../firebase';
 import { CareerRadarOpportunity, ApplicationPack, CVEditChecklist, CVEvidence, Profile, CvGenerationDebug } from '../types';
 import { CVTemplateFields, createCvGoogleDoc, downloadCvDoc, extractDriveFolderId, validateCvTemplateFields } from '../utils/cvDrive';
+import { aiRequestHeaders, hasStoredGeminiApiKey } from '../utils/aiSettings';
 
 interface OpportunitiesPanelProps {
   userId: string;
@@ -497,9 +498,13 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
       };
     }
 
+    if (!dryRunAi && !hasStoredGeminiApiKey()) {
+      throw new Error('Add your Gemini API key in AI Settings, or turn on Dry Run / Use Cached Output to avoid AI cost.');
+    }
+
     const response = await fetch('/api/generate-cv-template', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: aiRequestHeaders(),
       body: JSON.stringify({
         profile,
         opportunity: opp,
@@ -543,7 +548,7 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
   ): Promise<CvRequestPreview> => {
     const response = await fetch('/api/generate-cv-template', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: aiRequestHeaders(),
       body: JSON.stringify({
         profile,
         opportunity: opp,

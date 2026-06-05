@@ -3,6 +3,7 @@ import { Radar, Sparkles, Building, ShieldCheck, FileText, AlertTriangle, Check,
 import { doc, getDocFromServer, getDocsFromServer, collection, writeBatch } from 'firebase/firestore';
 import { db, formatFirestoreServerError } from '../firebase';
 import { Profile, CVEvidence, CareerRadarOpportunity, ApplicationPack, CVEditChecklist, DailyApplyBrief } from '../types';
+import { aiRequestHeaders, hasStoredGeminiApiKey } from '../utils/aiSettings';
 
 interface CareerRadarPanelProps {
   userId: string;
@@ -206,6 +207,10 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
         }
       }
 
+      if (!dryRunAi && !hasStoredGeminiApiKey()) {
+        throw new Error('Add your Gemini API key in AI Settings, or turn on Dry Run to preview without AI cost.');
+      }
+
       const key = analysisCacheKey(jobText, profile, evidences);
       if (useCachedOutput && !dryRunAi) {
         const cached = localStorage.getItem(key);
@@ -235,7 +240,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
 
       const response = await fetch('/api/analyze-job', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiRequestHeaders(),
         body: JSON.stringify({
           jobText,
           profile: profile || { fullName: 'Anonymous Candidate', education: '', experienceBrief: '', targetRoles: '' },

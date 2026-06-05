@@ -3,7 +3,7 @@ import { onAuthStateChanged, getRedirectResult, User as FirebaseUser } from 'fir
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Radar, User, Award, CheckSquare, Briefcase, Calendar, 
-  LogOut, Database, Activity
+  LogOut, Database, Activity, KeyRound
 } from 'lucide-react';
 
 import { auth, getFirestoreDiagnostics, logout, testConnection } from './firebase';
@@ -16,9 +16,10 @@ import CVChecklistPanel from './components/CVChecklistPanel';
 import DailyBriefPanel from './components/DailyBriefPanel';
 import LegacyImportPanel from './components/LegacyImportPanel';
 import AIUsageLogPanel from './components/AIUsageLogPanel';
+import AISettingsPanel from './components/AISettingsPanel';
 import FirestoreDiagnosticsPanel from './components/FirestoreDiagnosticsPanel';
 
-type ActiveTab = 'radar' | 'profile' | 'evidence' | 'opportunities' | 'checklist' | 'pipeline' | 'legacy-import' | 'ai-usage';
+type ActiveTab = 'radar' | 'profile' | 'evidence' | 'opportunities' | 'checklist' | 'pipeline' | 'legacy-import' | 'ai-usage' | 'ai-settings';
 
 let authenticatedConnectionTestScheduled = false;
 let redirectResultChecked = false;
@@ -245,6 +246,18 @@ export default function App() {
             <Activity className="h-4 w-4 shrink-0" />
             <span>AI Usage Log</span>
           </button>
+
+          <button
+            onClick={() => { setActiveTab('ai-settings'); setMenuOpen(false); }}
+            className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'ai-settings' 
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/10' 
+                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+            }`}
+          >
+            <KeyRound className="h-4 w-4 shrink-0" />
+            <span>AI Settings</span>
+          </button>
         </nav>
 
         {/* Sidebar Log Out Action */}
@@ -295,6 +308,7 @@ export default function App() {
             {activeTab === 'pipeline' && <DailyBriefPanel userId={user.uid} refreshToken={dataRefreshToken} />}
             {activeTab === 'legacy-import' && <LegacyImportPanel userId={user.uid} />}
             {activeTab === 'ai-usage' && <AIUsageLogPanel />}
+            {activeTab === 'ai-settings' && <AISettingsPanel />}
           </motion.div>
         </AnimatePresence>
       </main>

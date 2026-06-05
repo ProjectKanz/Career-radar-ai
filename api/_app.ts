@@ -4,15 +4,37 @@ import crypto from 'crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 import rateLimit from 'express-rate-limit';
 
-// Lazy-initialize the Gemini client to prevent startup failure if key is missing during early phases
-let aiClient: GoogleGenAI | null = null;
-function getGenAIClient(): GoogleGenAI {
-  if (!aiClient) {
+// Lazy-initialize the server Gemini client only when public fallback is explicitly enabled.
+let serverAiClient: GoogleGenAI | null = null;
+function getRequestGeminiApiKey(req: express.Request) {
+  const headerValue = req.header('x-gemini-api-key') || '';
+  return headerValue.trim();
+}
+
+function getGenAIClient(apiKey?: string): GoogleGenAI {
+  const requestApiKey = String(apiKey || '').trim();
+  if (requestApiKey) {
+    return new GoogleGenAI({
+      apiKey: requestApiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  }
+
+  const allowServerKeyPublic = String(process.env.ALLOW_SERVER_GEMINI_KEY_PUBLIC || 'false') === 'true';
+  if (!allowServerKeyPublic) {
+    throw new Error('Gemini API key required. Add your own key in AI Settings, or use Dry Run mode for a no-cost preview.');
+  }
+
+  if (!serverAiClient) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY is not defined. Please add it to your environment variables or Settings.');
+      throw new Error('GEMINI_API_KEY is not defined. Add a user API key in AI Settings, or configure the server environment.');
     }
-    aiClient = new GoogleGenAI({
+    serverAiClient = new GoogleGenAI({
       apiKey,
       httpOptions: {
         headers: {
@@ -21,7 +43,7 @@ function getGenAIClient(): GoogleGenAI {
       },
     });
   }
-  return aiClient;
+  return serverAiClient;
 }
 
 export const app = express();
@@ -1233,6 +1255,7 @@ app.get('/api/ai-cost-config', (req, res) => {
     dailyAiCallLimitDev: DAILY_AI_CALL_LIMIT_DEV,
     dailyAiCallsUsed: dailyAiCalls.get(today) || 0,
     requireConfirmForRegenerate: REQUIRE_CONFIRM_FOR_REGENERATE,
+    requiresUserGeminiApiKey: String(process.env.ALLOW_SERVER_GEMINI_KEY_PUBLIC || 'false') !== 'true',
     maxJobTextChars: MAX_JOB_TEXT_CHARS,
     tokenEstimateRule: 'chars / 4 when SDK token usage is unavailable'
   });
@@ -1265,7 +1288,6 @@ app.post('/api/analyze-job', analyzeLimiter, async (req, res) => {
     }
 
     const cappedJobText = capJobText(jobText);
-    const ai = getGenAIClient();
     const allEvidences = Array.isArray(evidences) ? evidences : [];
     const preRoleDna = classifyRoleDna(lowerText(cappedJobText));
     const promptEvidences = selectRelevantEvidencesForPrompt(allEvidences, lowerText(cappedJobText), preRoleDna);
@@ -1384,6 +1406,7 @@ INSTRUCTIONS:
       return;
     }
 
+    const ai = getGenAIClient(getRequestGeminiApiKey(req));
     assertCostGuard(inputCharacterCount);
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
@@ -1548,7 +1571,6 @@ app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
       return;
     }
 
-    const ai = getGenAIClient();
     const warning = '[Needs verified input]';
     const allEvidences = Array.isArray(evidences) ? evidences : [];
     const verifiedEvidences = allEvidences.filter((evidence) => evidence?.isVerified === true);
@@ -1777,6 +1799,7 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
       return;
     }
 
+    const ai = getGenAIClient(getRequestGeminiApiKey(req));
     assertCostGuard(inputCharacterCount, { allowInputOverride: Boolean(overrideCostGuard) });
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
