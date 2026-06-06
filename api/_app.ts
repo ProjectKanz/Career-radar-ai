@@ -1361,16 +1361,103 @@ function extractPdfText(buffer: Buffer) {
 }
 
 function extractGoogleDocText(document: Record<string, unknown>) {
-  const body = document.body as { content?: unknown[] } | undefined;
   const parts: string[] = [];
-  (body?.content || []).forEach((block) => {
-    const paragraph = (block as { paragraph?: { elements?: unknown[] } }).paragraph;
-    paragraph?.elements?.forEach((element) => {
-      const textRun = (element as { textRun?: { content?: string } }).textRun;
-      if (textRun?.content) parts.push(textRun.content);
-    });
-  });
+
+  function walk(node: unknown) {
+    if (!node || typeof node !== 'object') return;
+    const item = node as Record<string, unknown>;
+
+    const textRun = item.textRun as { content?: string } | undefined;
+    if (textRun?.content) parts.push(textRun.content);
+
+    const paragraph = item.paragraph as { elements?: unknown[] } | undefined;
+    paragraph?.elements?.forEach(walk);
+
+    const table = item.table as { tableRows?: unknown[] } | undefined;
+    table?.tableRows?.forEach(walk);
+
+    const tableRow = item.tableRow as { tableCells?: unknown[] } | undefined;
+    tableRow?.tableCells?.forEach(walk);
+
+    const tableCell = item.tableCell as { content?: unknown[] } | undefined;
+    tableCell?.content?.forEach(walk);
+
+    const header = item.header as { content?: unknown[] } | undefined;
+    header?.content?.forEach(walk);
+
+    const footer = item.footer as { content?: unknown[] } | undefined;
+    footer?.content?.forEach(walk);
+
+    const content = item.content as unknown[] | undefined;
+    content?.forEach(walk);
+  }
+
+  walk((document.body as { content?: unknown[] } | undefined) || {});
+  const headers = document.headers as Record<string, unknown> | undefined;
+  Object.values(headers || {}).forEach(walk);
+  const footers = document.footers as Record<string, unknown> | undefined;
+  Object.values(footers || {}).forEach(walk);
+
   return normalizeExtractedText(parts.join(''));
+}
+
+const ONBOARDING_CATEGORIES = [
+  'Work Achievement',
+  'Academic Honor',
+  'Side Project / Portfolio',
+  'Certification',
+  'Hard Skill / Technical Fact',
+  'Other Highlight'
+];
+
+function normalizeEvidenceCategory(value: unknown) {
+  const raw = String(value || '').toLowerCase();
+  if (/cert|toefl|license|licence|course|training/.test(raw)) return 'Certification';
+  if (/academic|award|honou?r|competition|finalist|winner|place|rank/.test(raw)) return 'Academic Honor';
+  if (/project|portfolio|volunteer|organization|organisational|organizational|community/.test(raw)) return 'Side Project / Portfolio';
+  if (/skill|technical|tool|software|language/.test(raw)) return 'Hard Skill / Technical Fact';
+  if (/work|intern|job|employee|business|sales|operation/.test(raw)) return 'Work Achievement';
+  return ONBOARDING_CATEGORIES.includes(String(value || '')) ? String(value) : 'Other Highlight';
+}
+
+function evidenceDraftKey(value: Record<string, unknown>) {
+  return [
+    normalizeEvidenceCategory(value.category),
+    value.title,
+    value.organization,
+    value.sourceSection
+  ].map((item) => String(item || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).join('|');
+}
+
+function normalizeOnboardingResult(value: Record<string, unknown>) {
+  const seen = new Set<string>();
+  const evidenceDrafts = Array.isArray(value.evidenceDrafts) ? value.evidenceDrafts : [];
+  return {
+    ...value,
+    evidenceDrafts: evidenceDrafts
+      .map((draft) => {
+        const item = (draft || {}) as Record<string, unknown>;
+        return {
+          ...item,
+          category: normalizeEvidenceCategory(item.category),
+          title: String(item.title || '').trim(),
+          organization: String(item.organization || '').trim(),
+          description: String(item.description || '').trim(),
+          sourceSection: String(item.sourceSection || '').trim(),
+          confidence: Number(item.confidence || 0),
+          inferredSkillTags: Array.isArray(item.inferredSkillTags)
+            ? item.inferredSkillTags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 8)
+            : []
+        };
+      })
+      .filter((draft) => draft.title && draft.description)
+      .filter((draft) => {
+        const key = evidenceDraftKey(draft);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+  };
 }
 
 async function googleFetchJson(url: string, accessToken: string, init: RequestInit = {}) {
@@ -1390,8 +1477,8 @@ async function googleFetchJson(url: string, accessToken: string, init: RequestIn
 }
 
 function placeholderTemplateText(fields: Record<string, string>, sourceName: string) {
-  const fullName = fields.fullName || '[Candidate Name]';
-  return `${fullName}
+  return `{{FULL_NAME}}
+{{CONTACT_LINE}}
 {{TARGET_TITLE}}
 {{PROFESSIONAL_SUMMARY}}
 
@@ -1475,18 +1562,20 @@ function onboardingSchema() {
         type: Type.OBJECT,
         properties: {
           fullName: { type: Type.STRING },
+          contactLine: { type: Type.STRING },
           education: { type: Type.STRING },
           professionalSummary: { type: Type.STRING },
           hardSkills: { type: Type.STRING },
           softSkills: { type: Type.STRING },
           languages: { type: Type.STRING }
         },
-        required: ['fullName', 'education', 'professionalSummary', 'hardSkills', 'softSkills', 'languages']
+        required: ['fullName', 'contactLine', 'education', 'professionalSummary', 'hardSkills', 'softSkills', 'languages']
       },
       templateFields: {
         type: Type.OBJECT,
         properties: {
           fullName: { type: Type.STRING },
+          contactLine: { type: Type.STRING },
           targetTitle: { type: Type.STRING },
           professionalSummary: { type: Type.STRING },
           education: { type: Type.STRING },
@@ -1516,7 +1605,7 @@ function onboardingSchema() {
           softSkills: { type: Type.STRING },
           languages: { type: Type.STRING }
         },
-        required: ['fullName', 'targetTitle', 'professionalSummary', 'education', 'experience1Title', 'experience1Organization', 'experience1Date', 'experience1Bullet1', 'experience1Bullet2', 'experience1Bullet3', 'experience2Title', 'experience2Organization', 'experience2Date', 'experience2Bullet1', 'experience2Bullet2', 'experience2Bullet3', 'project1Title', 'project1Bullet1', 'project2Title', 'project2Bullet1', 'project3Title', 'project3Bullet1', 'certifications', 'achievementBullet1', 'achievementBullet2', 'achievementBullet3', 'hardSkills', 'softSkills', 'languages']
+        required: ['fullName', 'contactLine', 'targetTitle', 'professionalSummary', 'education', 'experience1Title', 'experience1Organization', 'experience1Date', 'experience1Bullet1', 'experience1Bullet2', 'experience1Bullet3', 'experience2Title', 'experience2Organization', 'experience2Date', 'experience2Bullet1', 'experience2Bullet2', 'experience2Bullet3', 'project1Title', 'project1Bullet1', 'project2Title', 'project2Bullet1', 'project3Title', 'project3Bullet1', 'certifications', 'achievementBullet1', 'achievementBullet2', 'achievementBullet3', 'hardSkills', 'softSkills', 'languages']
       },
       evidenceDrafts: {
         type: Type.ARRAY,
@@ -1628,11 +1717,15 @@ You are a strict CV onboarding parser for CareerRadar AI. Return JSON only.
 Task:
 - Convert the user's existing CV text into generic CareerRadar placeholders.
 - Extract evidence suggestions as DRAFTS for user review.
+- Extract name and contact line exactly as present. If contact is split across phone/email/linkedin, join with " | ".
 - Do not invent facts, metrics, dates, employers, education, certifications, or skills.
 - If a value is missing or unclear, return "[Needs verified input]".
 - Evidence drafts must be based only on text present in the CV.
 - Evidence drafts are not verified. Use conservative wording and confidence 0-1.
 - Evidence draft category must be one of: Work Achievement, Academic Honor, Side Project / Portfolio, Certification, Hard Skill / Technical Fact, Other Highlight.
+- Do not infer business impact. If the CV says "closed IDR 12 million in deals", do not add "contributed to revenue growth" unless that exact causal claim appears.
+- Prefer wording that stays close to the original CV text, with light cleanup only.
+- Avoid creating two evidence drafts for the same fact, certificate, award, role, or project.
 
 Source name: ${sourceName || 'Uploaded CV'}
 
@@ -1658,7 +1751,7 @@ ${text}
       }
     });
 
-    const parsedData = JSON.parse(response.text || '{}');
+    const parsedData = normalizeOnboardingResult(JSON.parse(response.text || '{}'));
     const outputCharacterCount = response.text?.length || JSON.stringify(parsedData).length;
     recordAiUsage({
       featureName: 'Generate CV Onboarding',

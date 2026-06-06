@@ -10,7 +10,7 @@ import {
   Upload,
   Wand2
 } from 'lucide-react';
-import { collection, doc, getDocFromServer, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, doc, getDocFromServer, getDocsFromServer, setDoc, writeBatch } from 'firebase/firestore';
 import {
   db,
   formatFirestoreServerError,
@@ -82,6 +82,15 @@ const SOURCE_OPTIONS: { id: CvSourceType; label: string; description: string }[]
   }
 ];
 
+const EVIDENCE_CATEGORIES = [
+  'Work Achievement',
+  'Academic Honor',
+  'Side Project / Portfolio',
+  'Certification',
+  'Hard Skill / Technical Fact',
+  'Other Highlight'
+];
+
 const PLACEHOLDER_CHECKLIST = [
   '{{TARGET_TITLE}}',
   '{{PROFESSIONAL_SUMMARY}}',
@@ -129,6 +138,20 @@ function friendlyError(error: unknown) {
 
 function draftEvidenceId(index: number, runStamp: number) {
   return `ONB-${runStamp.toString(36).toUpperCase()}-${String(index + 1).padStart(2, '0')}`;
+}
+
+function cleanDraftValue(value: unknown) {
+  const cleaned = String(value || '').trim();
+  return cleaned && cleaned !== '[Needs verified input]' ? cleaned : '';
+}
+
+function normalizeEvidenceKey(value: Pick<CVEvidence, 'category' | 'title' | 'organization'> & { sourceSection?: string }) {
+  return [
+    value.category,
+    value.title,
+    value.organization || '',
+    value.sourceSection || ''
+  ].map((item) => String(item || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).join('|');
 }
 
 export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelProps) {
@@ -359,7 +382,18 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
       if (!response.ok) throw new Error(data.error || 'Placeholder template could not be created.');
 
       const created = data as CreatedTemplateDoc;
+      const profileDraft = onboardingResult.profileDraft || {};
+      const templateFields = onboardingResult.templateFields || {};
+      const profilePatch = {
+        ...(cleanDraftValue(profileDraft.fullName) ? { fullName: cleanDraftValue(profileDraft.fullName) } : {}),
+        ...(cleanDraftValue(profileDraft.education || templateFields.education) ? { education: cleanDraftValue(profileDraft.education || templateFields.education) } : {}),
+        ...(cleanDraftValue(profileDraft.professionalSummary || templateFields.professionalSummary) ? { experienceBrief: cleanDraftValue(profileDraft.professionalSummary || templateFields.professionalSummary) } : {}),
+        ...(cleanDraftValue(templateFields.targetTitle) ? { targetRoles: cleanDraftValue(templateFields.targetTitle) } : {}),
+        ...(cleanDraftValue(profileDraft.contactLine || templateFields.contactLine) ? { portfolioWording: cleanDraftValue(profileDraft.contactLine || templateFields.contactLine) } : {})
+      };
+
       await setDoc(doc(db, 'profiles', userId), {
+        ...profilePatch,
         cvTemplateDocumentId: created.id,
         cvTemplateSourceUrl: created.webViewLink,
         updatedAt: new Date().toISOString()
@@ -394,9 +428,30 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
       const now = new Date().toISOString();
       const runStamp = Date.now();
       const evidenceCollectionPath = `profiles/${userId}/cv_evidences`;
+      const existingSnapshot = await getDocsFromServer(collection(db, evidenceCollectionPath));
+      const existingKeys = new Set<string>();
+      existingSnapshot.forEach((item) => {
+        const data = item.data() as CVEvidence;
+        const sourceMatch = String(data.description || '').match(/Source section:\s*(.+)$/m);
+        existingKeys.add(normalizeEvidenceKey({
+          category: data.category,
+          title: data.title,
+          organization: data.organization || '',
+          sourceSection: sourceMatch?.[1] || ''
+        }));
+      });
+
       const batch = writeBatch(db);
+      let savedCount = 0;
+      let skippedCount = 0;
 
       selectedDrafts.forEach((draft, index) => {
+        const key = normalizeEvidenceKey(draft);
+        if (existingKeys.has(key)) {
+          skippedCount += 1;
+          return;
+        }
+        existingKeys.add(key);
         const itemRef = doc(collection(db, evidenceCollectionPath));
         const skillTags = draft.inferredSkillTags?.length ? `\nSkill tags: ${draft.inferredSkillTags.join(', ')}` : '';
         const sourceNote = draft.sourceSection ? `\nSource section: ${draft.sourceSection}` : '';
@@ -411,10 +466,12 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
           updatedAt: now
         };
         batch.set(itemRef, payload);
+        savedCount += 1;
       });
 
-      await batch.commit();
-      setWizardMessage(`${selectedDrafts.length} evidence drafts saved as unverified review items.`);
+      if (savedCount > 0) await batch.commit();
+      setEvidenceDrafts((current) => current.map((draft) => ({ ...draft, selected: false })));
+      setWizardMessage(`${savedCount} evidence drafts saved as unverified review items.${skippedCount ? ` ${skippedCount} duplicate draft(s) skipped.` : ''}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `profiles/${userId}/cv_evidences`);
     } finally {
@@ -580,6 +637,18 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
             <div className="mt-6 space-y-5">
               <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                 <h4 className="text-sm font-bold text-slate-900">Template mapping preview</h4>
+                {onboardingResult.profileDraft && (
+                  <div className="mt-3 rounded-lg border border-emerald-100 bg-white px-3 py-2">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Profile draft to save with this template</div>
+                    <div className="mt-1 text-xs leading-relaxed text-slate-700">
+                      {cleanDraftValue(onboardingResult.profileDraft.fullName) || 'Name needs review'}
+                      {cleanDraftValue(onboardingResult.profileDraft.contactLine) ? ` | ${cleanDraftValue(onboardingResult.profileDraft.contactLine)}` : ''}
+                    </div>
+                    <div className="mt-1 text-xs leading-relaxed text-slate-500">
+                      {cleanDraftValue(onboardingResult.profileDraft.education) || 'Education needs review'}
+                    </div>
+                  </div>
+                )}
                 {onboardingResult.mappingWarnings?.length > 0 && (
                   <div className="mt-3 space-y-2">
                     {onboardingResult.mappingWarnings.map((warning) => (
@@ -635,11 +704,15 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
                       </div>
 
                       <div className="mt-3 grid gap-3 md:grid-cols-3">
-                        <input
+                        <select
                           value={draft.category}
                           onChange={(event) => updateEvidenceDraft(index, { category: event.target.value })}
                           className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-emerald-500/50"
-                        />
+                        >
+                          {EVIDENCE_CATEGORIES.map((category) => (
+                            <option key={category} value={category}>{category}</option>
+                          ))}
+                        </select>
                         <input
                           value={draft.title}
                           onChange={(event) => updateEvidenceDraft(index, { title: event.target.value })}

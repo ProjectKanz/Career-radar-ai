@@ -113,8 +113,10 @@ function extractUrls(value: string | undefined) {
 }
 
 function buildContactLine(profile: Profile) {
+  const raw = String(profile.portfolioWording || '').trim();
   const urls = extractUrls(profile.portfolioWording).slice(0, 3);
-  return urls.length > 0 ? urls.join(' | ') : WARNING;
+  if (urls.length > 0) return urls.join(' | ');
+  return raw || WARNING;
 }
 
 export function extractDriveFolderId(input: string) {
@@ -316,12 +318,15 @@ export function buildCvHtml(input: RenderCvInput) {
 `;
 }
 
-function replacementMap(fields: CVTemplateFields) {
+function replacementMap(fields: CVTemplateFields, profile?: Profile) {
   const safeFields = validateCvTemplateFields(fields);
 
   return {
+    '{{FULL_NAME}}': profile?.fullName || WARNING,
+    '{{CONTACT_LINE}}': buildContactLine(profile || { fullName: '', education: '', experienceBrief: '', targetRoles: '', updatedAt: '' }),
     '{{TARGET_TITLE}}': safeFields.targetTitle,
     '{{PROFESSIONAL_SUMMARY}}': safeFields.professionalSummary,
+    '{{EDUCATION}}': profile?.education || WARNING,
     '{{EXPERIENCE_1_TITLE}}': safeFields.experience1Title,
     '{{EXPERIENCE_1_ORGANIZATION}}': safeFields.experience1Organization,
     '{{EXPERIENCE_1_DATE}}': safeFields.experience1Date,
@@ -399,7 +404,7 @@ export async function createCvGoogleDoc(input: GenerateCvDocInput): Promise<Gene
   }
 
   const copiedDoc = await copyResponse.json() as GeneratedDriveDoc;
-  const replacements = replacementMap(input.templateFields);
+  const replacements = replacementMap(input.templateFields, input.profile);
   const replacementEntries = Object.entries(replacements);
   input.onProgress?.('replacing_placeholders');
   const docsResponse = await fetch(`https://docs.googleapis.com/v1/documents/${copiedDoc.id}:batchUpdate`, {
@@ -446,6 +451,9 @@ export async function createCvGoogleDoc(input: GenerateCvDocInput): Promise<Gene
   };
 
   [
+    ['{{FULL_NAME}}'],
+    ['{{CONTACT_LINE}}'],
+    ['{{EDUCATION}}'],
     ['{{EXPERIENCE_1_BULLET_1}}', '{{CSA_BULLET_1}}'],
     ['{{EXPERIENCE_2_BULLET_1}}', '{{XL_BULLET_1}}'],
     ['{{PROJECT_1_BULLET_1}}', '{{PORTFOLIO_BULLET_1}}']
