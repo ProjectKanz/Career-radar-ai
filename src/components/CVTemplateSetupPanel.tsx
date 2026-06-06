@@ -60,6 +60,8 @@ interface CreatedTemplateDoc {
   id: string;
   name: string;
   webViewLink: string;
+  templateMode?: string;
+  warnings?: string[];
 }
 
 const SOURCE_OPTIONS: { id: CvSourceType; label: string; description: string }[] = [
@@ -349,7 +351,8 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
           sourceType: parsedSource.sourceType,
           sourceDocumentId: parsedSource.sourceDocumentId,
           sourceName: parsedSource.sourceName,
-          templateFields: onboardingResult.templateFields
+          templateFields: onboardingResult.templateFields,
+          preserveSourceFormatting: false
         })
       });
       const data = await response.json();
@@ -364,7 +367,11 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
       setCreatedTemplate(created);
       setTemplateDocId(created.id);
       setTemplateInput(created.webViewLink);
-      setWizardMessage('Placeholder template created in your Google Drive and saved for future CV generation.');
+      setWizardMessage(
+        created.templateMode === 'normalized_ats'
+          ? 'Clean placeholder template created in your Google Drive and saved for future CV generation.'
+          : 'Placeholder template created in your Google Drive and saved for future CV generation.'
+      );
     } catch (err) {
       setWizardError(friendlyError(err));
     } finally {
@@ -671,15 +678,20 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
                   <span>{wizardStatus === 'creatingTemplate' ? 'Creating...' : 'Create placeholder template'}</span>
                 </button>
                 {createdTemplate && (
-                  <a
-                    href={createdTemplate.webViewLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                    <span>Open generated template</span>
-                  </a>
+                  <>
+                    <a
+                      href={createdTemplate.webViewLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      <span>Open generated template</span>
+                    </a>
+                    {createdTemplate.warnings?.map((warning) => (
+                      <span key={warning} className="text-xs font-semibold text-slate-500">{warning}</span>
+                    ))}
+                  </>
                 )}
               </div>
             </div>

@@ -1437,6 +1437,19 @@ Languages: {{LANGUAGES}}
 Source: ${sourceName || 'CareerRadar CV onboarding'}`;
 }
 
+function placeholderTemplateRequests(fields: Record<string, string>, sourceName: string) {
+  return [{
+    insertText: {
+      location: { index: 1 },
+      text: placeholderTemplateText(fields, sourceName || '')
+    }
+  }];
+}
+
+function isPreserveSourceFormattingRequested(value: unknown) {
+  return value === true || value === 'true' || value === 'preserve';
+}
+
 function onboardingSchema() {
   const evidenceDraft = {
     type: Type.OBJECT,
@@ -1726,7 +1739,7 @@ function sourceValuePlaceholderPairs(templateFields: Record<string, string>) {
 
 app.post('/api/create-placeholder-template', analyzeLimiter, async (req, res) => {
   try {
-    const { accessToken, sourceType, sourceDocumentId, sourceName, templateFields } = req.body || {};
+    const { accessToken, sourceType, sourceDocumentId, sourceName, templateFields, preserveSourceFormatting } = req.body || {};
     if (!accessToken || !templateFields) {
       res.status(400).json({ error: 'Google Drive access and template fields are required.' });
       return;
@@ -1735,8 +1748,11 @@ app.post('/api/create-placeholder-template', analyzeLimiter, async (req, res) =>
     let documentId = '';
     let name = `CareerRadar Placeholder Template - ${sourceName || 'CV'}`;
     let webViewLink = '';
+    const usePreserveSourceFormatting = sourceType === 'google_docs'
+      && sourceDocumentId
+      && isPreserveSourceFormattingRequested(preserveSourceFormatting);
 
-    if (sourceType === 'google_docs' && sourceDocumentId) {
+    if (usePreserveSourceFormatting) {
       const copied = await googleFetchJson(
         `https://www.googleapis.com/drive/v3/files/${sourceDocumentId}/copy?fields=id,name,webViewLink`,
         accessToken,
@@ -1778,17 +1794,20 @@ app.post('/api/create-placeholder-template', analyzeLimiter, async (req, res) =>
       await googleFetchJson(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, accessToken, {
         method: 'POST',
         body: JSON.stringify({
-          requests: [{
-            insertText: {
-              location: { index: 1 },
-              text: placeholderTemplateText(templateFields, sourceName || '')
-            }
-          }]
+          requests: placeholderTemplateRequests(templateFields, sourceName || '')
         })
       });
     }
 
-    res.json({ id: documentId, name, webViewLink });
+    res.json({
+      id: documentId,
+      name,
+      webViewLink,
+      templateMode: usePreserveSourceFormatting ? 'preserve_source_best_effort' : 'normalized_ats',
+      warnings: usePreserveSourceFormatting
+        ? ['Source formatting preservation is best-effort and may miss text split across Google Docs elements.']
+        : ['Created a normalized ATS placeholder template so every required placeholder is present.']
+    });
   } catch (error) {
     console.error('Create placeholder template error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
