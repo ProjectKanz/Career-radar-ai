@@ -57,6 +57,7 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const MAX_AI_CALLS_PER_JOB_WORKFLOW = Number(process.env.MAX_AI_CALLS_PER_JOB_WORKFLOW || 2);
 const MAX_INPUT_CHARS_PER_CALL = Number(process.env.MAX_INPUT_CHARS_PER_CALL || 45000);
 const MAX_EVIDENCE_ITEMS_PER_CALL = Number(process.env.MAX_EVIDENCE_ITEMS_PER_CALL || 18);
+const MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL = Number(process.env.MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL || Math.min(MAX_EVIDENCE_ITEMS_PER_CALL, 12));
 const DAILY_AI_CALL_LIMIT_DEV = Number(process.env.DAILY_AI_CALL_LIMIT_DEV || 20);
 const REQUIRE_CONFIRM_FOR_REGENERATE = String(process.env.REQUIRE_CONFIRM_FOR_REGENERATE || 'true') === 'true';
 const MAX_JOB_TEXT_CHARS = Number(process.env.MAX_JOB_TEXT_CHARS || 12000);
@@ -1263,6 +1264,7 @@ app.get('/api/ai-cost-config', (req, res) => {
     maxAiCallsPerJobWorkflow: MAX_AI_CALLS_PER_JOB_WORKFLOW,
     maxInputCharsPerCall: MAX_INPUT_CHARS_PER_CALL,
     maxEvidenceItemsPerCall: MAX_EVIDENCE_ITEMS_PER_CALL,
+    maxAnalyzeEvidenceItemsPerCall: MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL,
     dailyAiCallLimitDev: DAILY_AI_CALL_LIMIT_DEV,
     dailyAiCallsUsed: dailyAiCalls.get(today) || 0,
     requireConfirmForRegenerate: REQUIRE_CONFIRM_FOR_REGENERATE,
@@ -1907,11 +1909,129 @@ app.post('/api/create-placeholder-template', analyzeLimiter, async (req, res) =>
   }
 });
 
+interface AnalyzePromptDiagnostics {
+  inputCharacterCount: number;
+  jobTextChars: number;
+  profileContextChars: number;
+  selectedEvidenceChars: number;
+  frameworkChars: number;
+  instructionTemplateChars: number;
+  totalPromptChars: number;
+  selectedEvidenceCount: number;
+  selectedEvidenceIds: string[];
+  fullEvidenceBankCount: number;
+  jobTextWasTruncated: boolean;
+  maxInputCharsPerCall: number;
+  maxEvidenceItemsPerCall: number;
+  promptBudgetStatus: 'ok' | 'over_limit';
+  largestSections: { label: string; chars: number }[];
+}
+
+function buildAnalyzeJobPrompt(jobText: unknown, profile: unknown, evidences: unknown) {
+  const cappedJobText = capJobText(jobText);
+  const allEvidences = Array.isArray(evidences) ? evidences : [];
+  const preRoleDna = classifyRoleDna(lowerText(cappedJobText));
+  const promptEvidences = selectRelevantEvidencesForPrompt(
+    allEvidences,
+    lowerText(cappedJobText),
+    preRoleDna,
+    MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL
+  );
+  const compactRequestContext = {
+    jobText: cappedJobText,
+    profile: compactProfile(profile),
+    evidences: promptEvidences
+  };
+  const cacheKey = `analyze:${hashPayload(compactRequestContext)}`;
+  const cvTailoringFramework = compactCvTailoringFrameworkForPrompt(
+    buildCvTailoringFramework({ jobText: cappedJobText, profile, evidences: allEvidences }),
+    'compact'
+  );
+
+  const profileJson = JSON.stringify(compactRequestContext.profile, null, 2);
+  const evidenceJson = JSON.stringify(promptEvidences, null, 2);
+  const frameworkJson = JSON.stringify(cvTailoringFramework, null, 2);
+  const instructionTemplate = `You are a highly analytical AI talent matcher and strategic resume advisor. Your task is to perform an exhaustive, objective comparison between a candidate's portfolio/evidence bank (the ground truth facts) and a specific job description.
+
+Candidate Profile:
+${profileJson}
+
+Top Relevant Candidate CV Evidence Bank (compact, deduped, capped at ${MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL} items):
+${evidenceJson}
+
+Target Job Description:
+${cappedJobText}
+
+Reusable CV Tailoring Framework:
+${frameworkJson}
+
+INSTRUCTIONS:
+0. Extract the target company name and role/title from the job description when present.
+1. Conduct a rigorous, human-grade, zero-inflation gap analysis. Evaluate the alignment of education, academic score, years of experience, core technologies, and specialized achievements.
+2. Formulate a final "match quality" score (fitScore) between 0 and 100 based on criteria fulfillment, and choose an actionable recommendation decision:
+   - "Apply Now": Highly optimized match (fitScore >= 85).
+   - "Apply After CV Adjustment": Strong baseline match, but custom section overrides are critical to show exact grounding (fitScore 65-84).
+   - "Save for Later": Decent peripheral alignment or stretch role (fitScore 50-64).
+   - "Skip": Fatal mismatch/red flag triggers present (fitScore < 50).
+   - "Verify First": Ambiguous details or requires verifying certification/gaps.
+3. Align CV Checklist suggestions STRICTLY with the candidate's existing background. If a checklist item is suggested, it MUST show how to contextualize, reword, or rewrite a section using actual evidence item IDs from the database, or generic optimization when no specific evidence matches. DO NOT invent entirely fake credentials or skills the candidate does not have.
+4. Draft a highly compelling Application Pack tailored to the target role:
+   - Write a refined summary introduction ("summaryRewrite") specific to the hiring firm.
+   - Compose a brilliant, tailored outreach pitch / cover letter ("coverMessage").
+   - Compose a modern, highly targeted cold LinkedIn recruiter message ("linkedinMessage").
+5. Use the framework's role DNA, CV base version, evidence-to-role mappings, certification priority, and noise reduction rules when generating checklist and application pack content.
+6. When writing work-experience checklist text, use this bullet formula: action verb + scope/scale + method + business outcome.
+7. For non-technical business roles, translate technical work into business meaning instead of listing excessive tool stacks.`;
+
+  const prompt = `\n${instructionTemplate}\n`;
+  const sectionCounts = [
+    { label: 'job description', chars: cappedJobText.length },
+    { label: 'compact candidate profile', chars: profileJson.length },
+    { label: 'selected evidence', chars: evidenceJson.length },
+    { label: 'compact CV tailoring framework', chars: frameworkJson.length },
+    {
+      label: 'prompt instructions/template',
+      chars: Math.max(0, prompt.length - cappedJobText.length - profileJson.length - evidenceJson.length - frameworkJson.length)
+    }
+  ];
+  const diagnostics: AnalyzePromptDiagnostics = {
+    inputCharacterCount: prompt.length,
+    jobTextChars: cappedJobText.length,
+    profileContextChars: profileJson.length,
+    selectedEvidenceChars: evidenceJson.length,
+    frameworkChars: frameworkJson.length,
+    instructionTemplateChars: sectionCounts[4].chars,
+    totalPromptChars: prompt.length,
+    selectedEvidenceCount: promptEvidences.length,
+    selectedEvidenceIds: promptEvidences
+      .map((evidence) => evidence.evidenceId || evidence.id || evidence.title)
+      .filter((value): value is string => Boolean(value)),
+    fullEvidenceBankCount: allEvidences.length,
+    jobTextWasTruncated: String(jobText || '').length > cappedJobText.length,
+    maxInputCharsPerCall: MAX_INPUT_CHARS_PER_CALL,
+    maxEvidenceItemsPerCall: MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL,
+    promptBudgetStatus: prompt.length > MAX_INPUT_CHARS_PER_CALL ? 'over_limit' : 'ok',
+    largestSections: sectionCounts.sort((a, b) => b.chars - a.chars)
+  };
+
+  return {
+    prompt,
+    cappedJobText,
+    allEvidences,
+    promptEvidences,
+    compactRequestContext,
+    cacheKey,
+    cvTailoringFramework,
+    diagnostics
+  };
+}
+
 // Career Radar Job Match Analyzer Endpoint
 app.post('/api/analyze-job', analyzeLimiter, async (req, res) => {
   let inputCharacterCount = JSON.stringify(req.body || {}).length;
   let logCompany = '';
   let logRole = '';
+  let analyzeDiagnostics: AnalyzePromptDiagnostics | null = null;
   const startedAt = Date.now();
 
   try {
@@ -1922,17 +2042,18 @@ app.post('/api/analyze-job', analyzeLimiter, async (req, res) => {
       return;
     }
 
-    const cappedJobText = capJobText(jobText);
-    const allEvidences = Array.isArray(evidences) ? evidences : [];
-    const preRoleDna = classifyRoleDna(lowerText(cappedJobText));
-    const promptEvidences = selectRelevantEvidencesForPrompt(allEvidences, lowerText(cappedJobText), preRoleDna);
-    const compactRequestContext = {
-      jobText: cappedJobText,
-      profile: compactProfile(profile),
-      evidences: promptEvidences
-    };
-    const cacheKey = `analyze:${hashPayload(compactRequestContext)}`;
-
+    const promptBundle = buildAnalyzeJobPrompt(jobText, profile, evidences);
+    const {
+      prompt,
+      cappedJobText,
+      allEvidences,
+      promptEvidences,
+      compactRequestContext,
+      cacheKey,
+      diagnostics
+    } = promptBundle;
+    inputCharacterCount = diagnostics.inputCharacterCount;
+    analyzeDiagnostics = diagnostics;
     const cachedOutputExists = aiResponseCache.has(cacheKey);
 
     if (!dryRun && useCachedOutput && cachedOutputExists) {
@@ -1951,44 +2072,6 @@ app.post('/api/analyze-job', analyzeLimiter, async (req, res) => {
       return;
     }
 
-    const cvTailoringFramework = buildCvTailoringFramework({ jobText: cappedJobText, profile, evidences: allEvidences });
-
-    // Construct the structured analysis prompt for the configured Gemini model.
-    const prompt = `
-You are a highly analytical AI talent matcher and strategic resume advisor. Your task is to perform an exhaustive, objective comparison between a candidate's portfolio/evidence bank (the ground truth facts) and a specific job description.
-
-Candidate Profile:
-${JSON.stringify(compactRequestContext.profile, null, 2)}
-
-Top Relevant Candidate CV Evidence Bank (compact, deduped, capped at ${MAX_EVIDENCE_ITEMS_PER_CALL} items):
-${JSON.stringify(promptEvidences, null, 2)}
-
-Target Job Description:
-${cappedJobText}
-
-Reusable CV Tailoring Framework:
-${JSON.stringify(cvTailoringFramework, null, 2)}
-
-INSTRUCTIONS:
-0. Extract the target company name and role/title from the job description when present.
-1. Conduct a rigorous, human-grade, zero-inflation gap analysis. Evaluate the alignment of education, academic score, years of experience, core technologies, and specialized achievements.
-2. Formulate a final "match quality" score (fitScore) between 0 and 100 based on criteria fulfillment, and choose an actionable recommendation decision:
-   - "Apply Now": Highly optimized match (fitScore >= 85).
-   - "Apply After CV Adjustment": Strong baseline match, but custom section overrides are critical to show exact grounding (fitScore 65-84).
-   - "Save for Later": Decent peripheral alignment or stretch role (fitScore 50-64).
-   - "Skip": Fatal mismatch/red flag triggers present (fitScore < 50).
-   - "Verify First": Ambiguous details or requires verifying certification/gaps.
-3. Align CV Checklist suggestions STRICTLY with the candidate's existing background. If a checklist item is suggested, it MUST show how to contextualize, reword, or rewrite a section using actual evidence item IDs (e.g. CSA-01) from the database, or generic optimization (when no specific evidence matches). DO NOT invent entirely fake credentials or skills the candidate does not have.
-4. Draft a highly compelling Application Pack tailored to the target role:
-   - Write a refined summary introduction ("summaryRewrite") specific to the hiring firm.
-   - Compose a brilliant, tailored outreach pitch / cover letter ("coverMessage").
-   - Compose a modern, highly targeted cold LinkedIn recruiter message ("linkedinMessage").
-5. Use the framework's role DNA, CV base version, evidence-to-role mappings, certification priority, and noise reduction rules when generating checklist and application pack content.
-6. When writing work-experience checklist text, use this bullet formula: action verb + scope/scale + method + business outcome.
-7. For non-technical business roles, translate technical work into business meaning instead of listing excessive tool stacks.
-`;
-
-    inputCharacterCount = prompt.length;
     const dryRunPayload = {
       dryRun: true,
       endpointName: '/api/analyze-job',
@@ -1999,9 +2082,10 @@ INSTRUCTIONS:
       estimatedInputTokens: estimateTokensFromChars(inputCharacterCount),
       selectedEvidenceCount: promptEvidences.length,
       selectedEvidenceIds: promptEvidences.map((evidence) => evidence.evidenceId || evidence.id || evidence.title).filter(Boolean),
-      maxEvidenceItemsPerCall: MAX_EVIDENCE_ITEMS_PER_CALL,
+      maxEvidenceItemsPerCall: MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL,
       fullEvidenceBankCount: allEvidences.length,
       jobTextWasTruncated: String(jobText).length > cappedJobText.length,
+      payloadDiagnostics: diagnostics,
       cachedOutputExists,
       cacheStatus: cachedOutputExists ? 'hit' : 'miss',
       dryRunEnabled: Boolean(dryRun),
@@ -2010,18 +2094,21 @@ INSTRUCTIONS:
         'capped job description',
         'compact candidate profile',
         `top ${promptEvidences.length} ranked evidence items`,
-        'role DNA and CV section rules',
+        'compact role DNA and CV section rules',
         'application pack/checklist generation instructions'
       ],
       contextExcludedOrReduced: [
         String(jobText).length > cappedJobText.length ? 'job description truncated to configured cap' : 'full job description kept within cap',
         allEvidences.length > promptEvidences.length ? `${allEvidences.length - promptEvidences.length} lower-ranked evidence items excluded` : 'no evidence items excluded by cap',
+        'CV tailoring framework compacted before prompt',
         'Firestore debug/status data excluded',
         'existing generated application packs/checklists excluded from job analysis prompt'
       ],
       warning: cachedOutputExists && useCachedOutput
         ? 'No AI call will be made if you run with cached output enabled.'
-        : 'Preview mode only. No Gemini call was made.',
+        : diagnostics.promptBudgetStatus === 'over_limit'
+          ? `Preview mode only. This prompt would be blocked because ${diagnostics.inputCharacterCount.toLocaleString()} chars exceeds ${MAX_INPUT_CHARS_PER_CALL.toLocaleString()}.`
+          : 'Preview mode only. No Gemini call was made.',
       cacheKey,
       promptPreview: prompt.slice(0, 6000)
     };
@@ -2164,6 +2251,11 @@ INSTRUCTIONS:
     res.json({ ...parsedData, cacheStatus: 'miss' });
   } catch (error) {
     console.error('API Career Radar Analysis Error:', error);
+    const rawErrorMessage = error instanceof Error ? error.message : String(error);
+    const largestSection = analyzeDiagnostics?.largestSections?.[0];
+    const errorMessage = rawErrorMessage.includes('MAX_INPUT_CHARS_PER_CALL') && largestSection
+      ? `${rawErrorMessage} Largest prompt section: ${largestSection.label} (${largestSection.chars.toLocaleString()} chars). Run Dry Run to inspect the payload breakdown.`
+      : rawErrorMessage;
     recordAnalyzeJobUsage(
       'error',
       inputCharacterCount,
@@ -2171,9 +2263,9 @@ INSTRUCTIONS:
       Date.now() - startedAt,
       logCompany,
       logRole,
-      error instanceof Error ? error.message : String(error)
+      errorMessage
     );
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Internal Server Error' });
+    res.status(500).json({ error: errorMessage, payloadDiagnostics: analyzeDiagnostics || undefined });
   }
 });
 

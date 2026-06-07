@@ -21,9 +21,27 @@ interface AiCostConfig {
   model: string;
   maxInputCharsPerCall: number;
   maxEvidenceItemsPerCall: number;
+  maxAnalyzeEvidenceItemsPerCall?: number;
   dailyAiCallLimitDev: number;
   dailyAiCallsUsed: number;
   requireConfirmForRegenerate: boolean;
+}
+
+interface AiPayloadDiagnostics {
+  inputCharacterCount: number;
+  jobTextChars: number;
+  profileContextChars: number;
+  selectedEvidenceChars: number;
+  frameworkChars: number;
+  instructionTemplateChars: number;
+  totalPromptChars: number;
+  selectedEvidenceCount: number;
+  fullEvidenceBankCount: number;
+  jobTextWasTruncated: boolean;
+  maxInputCharsPerCall: number;
+  maxEvidenceItemsPerCall: number;
+  promptBudgetStatus: 'ok' | 'over_limit';
+  largestSections?: { label: string; chars: number }[];
 }
 
 interface AiRequestPreview {
@@ -43,6 +61,8 @@ interface AiRequestPreview {
   contextExcludedOrReduced: string[];
   warning?: string;
   promptPreview?: string;
+  requestFingerprint?: string;
+  payloadDiagnostics?: AiPayloadDiagnostics;
 }
 
 function safeText(value: unknown, fallback = '-') {
@@ -112,6 +132,10 @@ function analysisCacheKey(jobText: string, profile: Profile | null, evidences: C
     profileName: profile?.fullName || '',
     evidenceKeys: evidences.map((item) => `${item.evidenceId || item.id}:${item.updatedAt}:${item.isVerified}`).sort()
   }))}`;
+}
+
+function formatChars(value?: number) {
+  return Number(value || 0).toLocaleString();
 }
 
 export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerRadarPanelProps) {
@@ -219,6 +243,12 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
     localStorage.setItem('careerRadarUseCachedOutput', String(useCachedOutput));
   }, [useCachedOutput]);
 
+  const currentAnalysisFingerprint = analysisCacheKey(jobText, profile, evidences);
+  const previewIsStale = Boolean(aiRequestPreview?.requestFingerprint && aiRequestPreview.requestFingerprint !== currentAnalysisFingerprint);
+  const exactInputChars = Number(aiRequestPreview?.payloadDiagnostics?.inputCharacterCount || aiRequestPreview?.inputCharacterCount || 0);
+  const budgetLimit = aiRequestPreview?.payloadDiagnostics?.maxInputCharsPerCall || costConfig?.maxInputCharsPerCall;
+  const largestPromptSection = aiRequestPreview?.payloadDiagnostics?.largestSections?.[0];
+
   const runAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!jobText.trim()) return;
@@ -252,7 +282,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
         throw new Error('Add your Gemini API key in AI Settings, or turn on Dry Run to preview without AI cost.');
       }
 
-      const key = analysisCacheKey(jobText, profile, evidences);
+      const key = currentAnalysisFingerprint;
       if (useCachedOutput && !dryRunAi) {
         const cached = localStorage.getItem(key);
         if (cached) {
@@ -266,16 +296,18 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
         }
       }
 
-      const estimatedInputChars = JSON.stringify({
-        jobText,
-        profile: profile || {},
-        evidences: evidences.slice(0, costConfig?.maxEvidenceItemsPerCall || 18)
-      }).length;
-      if (!dryRunAi && costConfig && estimatedInputChars > costConfig.maxInputCharsPerCall) {
-        const proceed = window.confirm(`This analysis is estimated at ${estimatedInputChars.toLocaleString()} input chars, above the configured ${costConfig.maxInputCharsPerCall.toLocaleString()} char guard. Continue with AI anyway?`);
-        if (!proceed) {
-          setAnalyzing(false);
-          return;
+      if (!dryRunAi) {
+        if (!aiRequestPreview) {
+          throw new Error('Run Dry Run / No AI first to get the exact backend payload estimate before spending a Gemini call.');
+        }
+        if (previewIsStale) {
+          throw new Error('The AI request preview is stale because the job text, profile, or evidence bank changed. Run Dry Run / No AI again.');
+        }
+        const previewInputChars = aiRequestPreview.payloadDiagnostics?.inputCharacterCount || aiRequestPreview.inputCharacterCount;
+        const maxInputChars = aiRequestPreview.payloadDiagnostics?.maxInputCharsPerCall || costConfig?.maxInputCharsPerCall || 45000;
+        if (previewInputChars > maxInputChars) {
+          const largest = aiRequestPreview.payloadDiagnostics?.largestSections?.[0];
+          throw new Error(`Exact AI request is ${previewInputChars.toLocaleString()} chars, above the ${maxInputChars.toLocaleString()} char limit.${largest ? ` Largest section: ${largest.label} (${largest.chars.toLocaleString()} chars).` : ''}`);
         }
       }
 
@@ -324,11 +356,13 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
           warning: browserCacheExists
             ? 'Browser cache hit available. No AI call will be made if you run with cached output enabled.'
             : data.warning || 'No AI call will be made in preview mode.',
-          promptPreview: data.promptPreview || ''
+          promptPreview: data.promptPreview || '',
+          requestFingerprint: key,
+          payloadDiagnostics: data.payloadDiagnostics || undefined
         };
         setAiRequestPreview(preview);
         setPreviewStatus('ready');
-        setAiBudgetPreview(`Dry Run only: ${data.inputCharacterCount?.toLocaleString?.() || data.inputCharacterCount} input chars, about ${data.estimatedInputTokens?.toLocaleString?.() || data.estimatedInputTokens} tokens, ${data.selectedEvidenceCount} evidence items selected. No Gemini call was made.`);
+        setAiBudgetPreview(`Dry Run only: ${formatChars(preview.payloadDiagnostics?.inputCharacterCount || preview.inputCharacterCount)} exact input chars, about ${formatChars(preview.estimatedInputTokens)} tokens, ${preview.selectedEvidenceCount} evidence items selected. No Gemini call was made.`);
         setAnalysisResult(null);
         return;
       }
@@ -649,12 +683,20 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
               <div>
                 <div className="font-bold text-slate-700">AI budget estimate</div>
                 <div className="mt-1">
-                  Expected calls: {dryRunAi ? 0 : 1} · Model: {costConfig?.model || 'gemini'} · Approx input: {JSON.stringify({
-                    jobText,
-                    profile: profile || {},
-                    evidences: evidences.slice(0, costConfig?.maxEvidenceItemsPerCall || 18)
-                  }).length.toLocaleString()} chars · Daily dev usage: {costConfig ? `${costConfig.dailyAiCallsUsed}/${costConfig.dailyAiCallLimitDev}` : 'loading'}
+                  Expected calls: {dryRunAi ? '0' : '1 Gemini call, 3 generated outputs'} · Model: {costConfig?.model || 'gemini'} · Exact input: {
+                    aiRequestPreview && !previewIsStale
+                      ? `${formatChars(exactInputChars)} chars`
+                      : 'run Dry Run / No AI for exact estimate'
+                  } · Daily dev usage: {costConfig ? `${costConfig.dailyAiCallsUsed}/${costConfig.dailyAiCallLimitDev}` : 'loading'}
                 </div>
+                {aiRequestPreview && previewIsStale && (
+                  <div className="mt-1 font-semibold text-amber-700">Preview is stale. Run Dry Run again before real AI.</div>
+                )}
+                {aiRequestPreview && !previewIsStale && budgetLimit && exactInputChars > budgetLimit && (
+                  <div className="mt-1 font-semibold text-rose-700">
+                    Over limit by {formatChars(exactInputChars - budgetLimit)} chars{largestPromptSection ? `; largest section: ${largestPromptSection.label}` : ''}.
+                  </div>
+                )}
                 {aiBudgetPreview && (
                   <div className="mt-1 font-semibold text-emerald-700">{aiBudgetPreview}</div>
                 )}
@@ -745,7 +787,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
                 <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Budget</div>
                   <div className="mt-1 text-sm font-bold text-slate-800">
-                    {aiRequestPreview.expectedAiCalls} AI call{aiRequestPreview.expectedAiCalls === 1 ? '' : 's'} · {aiRequestPreview.model}
+                    {aiRequestPreview.expectedAiCalls === 1 ? '1 Gemini call, 3 generated outputs' : `${aiRequestPreview.expectedAiCalls} AI calls`} · {aiRequestPreview.model}
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
@@ -771,6 +813,58 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
               <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-sm font-semibold text-emerald-800">
                 {aiRequestPreview.warning || 'No AI call will be made in preview mode.'}
               </div>
+
+              {previewIsStale && (
+                <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                  This preview is stale because the job text, profile, or evidence bank changed. Run Dry Run again before using real AI.
+                </div>
+              )}
+
+              {aiRequestPreview.payloadDiagnostics && (
+                <div className="rounded-xl border border-slate-100 bg-white px-4 py-3">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Exact Payload Breakdown</h4>
+                    <span className={`text-xs font-bold px-3 py-1 rounded-full ${
+                      aiRequestPreview.payloadDiagnostics.promptBudgetStatus === 'over_limit'
+                        ? 'bg-rose-50 text-rose-700'
+                        : 'bg-emerald-50 text-emerald-700'
+                    }`}>
+                      {aiRequestPreview.payloadDiagnostics.promptBudgetStatus === 'over_limit' ? 'Over Limit' : 'Within Limit'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 text-xs">
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="font-bold text-slate-400 uppercase">Job Text</div>
+                      <div className="font-extrabold text-slate-800">{formatChars(aiRequestPreview.payloadDiagnostics.jobTextChars)}</div>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="font-bold text-slate-400 uppercase">Profile</div>
+                      <div className="font-extrabold text-slate-800">{formatChars(aiRequestPreview.payloadDiagnostics.profileContextChars)}</div>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="font-bold text-slate-400 uppercase">Evidence</div>
+                      <div className="font-extrabold text-slate-800">{formatChars(aiRequestPreview.payloadDiagnostics.selectedEvidenceChars)}</div>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="font-bold text-slate-400 uppercase">Framework</div>
+                      <div className="font-extrabold text-slate-800">{formatChars(aiRequestPreview.payloadDiagnostics.frameworkChars)}</div>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2">
+                      <div className="font-bold text-slate-400 uppercase">Instructions</div>
+                      <div className="font-extrabold text-slate-800">{formatChars(aiRequestPreview.payloadDiagnostics.instructionTemplateChars)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 text-xs font-semibold text-slate-500">
+                    Total prompt: {formatChars(aiRequestPreview.payloadDiagnostics.totalPromptChars)} chars · Evidence selected: {aiRequestPreview.payloadDiagnostics.selectedEvidenceCount}/{aiRequestPreview.payloadDiagnostics.fullEvidenceBankCount} · Limit: {formatChars(aiRequestPreview.payloadDiagnostics.maxInputCharsPerCall)} chars
+                    {aiRequestPreview.payloadDiagnostics.jobTextWasTruncated ? ' · Job text was truncated to the configured cap.' : ''}
+                  </div>
+                  {aiRequestPreview.payloadDiagnostics.largestSections?.length ? (
+                    <div className="mt-2 text-xs font-semibold text-slate-500">
+                      Largest sections: {aiRequestPreview.payloadDiagnostics.largestSections.slice(0, 3).map((section) => `${section.label} (${formatChars(section.chars)})`).join(', ')}
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="rounded-xl border border-slate-100 bg-white px-4 py-3">
