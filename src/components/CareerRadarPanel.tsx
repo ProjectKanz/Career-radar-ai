@@ -138,6 +138,15 @@ function formatChars(value?: number) {
   return Number(value || 0).toLocaleString();
 }
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+    reader.onerror = () => reject(reader.error || new Error('File could not be read.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerRadarPanelProps) {
   const cachedContext = radarContextCache.get(userId);
   const [profile, setProfile] = useState<Profile | null>(() => cachedContext?.profile ?? null);
@@ -170,6 +179,9 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
   const [aiRequestPreview, setAiRequestPreview] = useState<AiRequestPreview | null>(null);
   const [previewStatus, setPreviewStatus] = useState<'idle' | 'preparing' | 'ready' | 'error'>('idle');
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [extractingScreenshot, setExtractingScreenshot] = useState(false);
+  const [screenshotMessage, setScreenshotMessage] = useState<string | null>(null);
+  const [screenshotError, setScreenshotError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -248,6 +260,66 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
   const exactInputChars = Number(aiRequestPreview?.payloadDiagnostics?.inputCharacterCount || aiRequestPreview?.inputCharacterCount || 0);
   const budgetLimit = aiRequestPreview?.payloadDiagnostics?.maxInputCharsPerCall || costConfig?.maxInputCharsPerCall;
   const largestPromptSection = aiRequestPreview?.payloadDiagnostics?.largestSections?.[0];
+
+  const extractJobScreenshot = async (file: File | null) => {
+    if (!file) return;
+    setScreenshotError(null);
+    setScreenshotMessage(null);
+    setError(null);
+
+    try {
+      if (!hasStoredGeminiApiKey()) {
+        throw new Error('Add your Gemini API key in AI Settings before extracting text from a screenshot.');
+      }
+      if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+        throw new Error('Upload a PNG, JPG, JPEG, or WEBP screenshot.');
+      }
+      if (file.size > 3 * 1024 * 1024) {
+        throw new Error('Screenshot is too large. Use an image under 3MB.');
+      }
+
+      setExtractingScreenshot(true);
+      const imageBase64 = await readFileAsBase64(file);
+      const response = await fetch('/api/extract-job-screenshot', {
+        method: 'POST',
+        headers: aiRequestHeaders(),
+        body: JSON.stringify({
+          imageBase64,
+          mimeType: file.type,
+          fileName: file.name
+        })
+      });
+
+      if (!response.ok) {
+        let errMsg = 'Screenshot extraction failed on back-end server.';
+        try {
+          const errData = await response.json();
+          if (errData?.error) errMsg = userFacingAiError(errData.error);
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      const extractedText = String(data.jobText || '').trim();
+      if (!extractedText) {
+        throw new Error('No readable job description text was found. Try a clearer screenshot or paste the text manually.');
+      }
+
+      setJobText(extractedText);
+      if (data.company && !companyName) setCompanyName(String(data.company));
+      if (data.role && !roleTitle) setRoleTitle(String(data.role));
+      setAiRequestPreview(null);
+      setPreviewStatus('idle');
+      setAiBudgetPreview(null);
+      setScreenshotMessage(`Screenshot extracted ${extractedText.length.toLocaleString()} chars${data.sourceNotes ? `; ${data.sourceNotes}` : ''}`);
+    } catch (err: any) {
+      const message = userFacingAiError(err.message || err || 'Screenshot extraction failed.');
+      setScreenshotError(message);
+      setError(message);
+    } finally {
+      setExtractingScreenshot(false);
+    }
+  };
 
   const runAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -621,7 +693,40 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
       <div className="bg-white border border-slate-100 shadow-sm rounded-2xl overflow-hidden p-6 mb-8">
         <form onSubmit={runAnalysis} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Job Description Text / Raw Specifications</label>
+            <div className="mb-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">Job Description Text / Raw Specifications</label>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold cursor-pointer ${
+                  extractingScreenshot
+                    ? 'border-slate-200 bg-slate-100 text-slate-400'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                }`}>
+                  <FileText className={`h-4 w-4 ${extractingScreenshot ? 'animate-pulse' : ''}`} />
+                  <span>{extractingScreenshot ? 'Extracting screenshot...' : 'Upload screenshot'}</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    disabled={extractingScreenshot}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      event.target.value = '';
+                      void extractJobScreenshot(file);
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            </div>
+            {screenshotMessage && (
+              <div className="mb-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                {screenshotMessage}
+              </div>
+            )}
+            {screenshotError && (
+              <div className="mb-2 rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                {screenshotError}
+              </div>
+            )}
             <textarea
               required
               rows={8}

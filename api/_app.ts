@@ -61,6 +61,7 @@ const MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL = Number(process.env.MAX_ANALYZE_EVIDE
 const DAILY_AI_CALL_LIMIT_DEV = Number(process.env.DAILY_AI_CALL_LIMIT_DEV || 20);
 const REQUIRE_CONFIRM_FOR_REGENERATE = String(process.env.REQUIRE_CONFIRM_FOR_REGENERATE || 'true') === 'true';
 const MAX_JOB_TEXT_CHARS = Number(process.env.MAX_JOB_TEXT_CHARS || 12000);
+const MAX_JOB_SCREENSHOT_BYTES = Number(process.env.MAX_JOB_SCREENSHOT_BYTES || 3 * 1024 * 1024);
 
 interface AiUsageLogEntry {
   id: string;
@@ -1905,6 +1906,120 @@ app.post('/api/create-placeholder-template', analyzeLimiter, async (req, res) =>
     });
   } catch (error) {
     console.error('Create placeholder template error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post('/api/extract-job-screenshot', analyzeLimiter, async (req, res) => {
+  let inputCharacterCount = JSON.stringify(req.body || {}).length;
+  const startedAt = Date.now();
+
+  try {
+    const { imageBase64, mimeType, fileName } = req.body || {};
+    const resolvedMimeType = String(mimeType || '').trim().toLowerCase();
+    if (!imageBase64 || !/^image\/(png|jpe?g|webp)$/.test(resolvedMimeType)) {
+      res.status(400).json({ error: 'Upload a PNG, JPG, JPEG, or WEBP job description screenshot.' });
+      return;
+    }
+
+    const normalizedBase64 = String(imageBase64).replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '').trim();
+    const imageBuffer = Buffer.from(normalizedBase64, 'base64');
+    if (!imageBuffer.length) {
+      res.status(400).json({ error: 'Screenshot image payload is empty or unreadable.' });
+      return;
+    }
+    if (imageBuffer.length > MAX_JOB_SCREENSHOT_BYTES) {
+      res.status(400).json({ error: `Screenshot is too large. Max ${Math.round(MAX_JOB_SCREENSHOT_BYTES / 1024 / 1024)}MB.` });
+      return;
+    }
+    const requestGeminiApiKey = getRequestGeminiApiKey(req);
+    if (!requestGeminiApiKey) {
+      res.status(400).json({ error: 'Gemini API key required. Add your own key in AI Settings before extracting a job screenshot.' });
+      return;
+    }
+
+    const prompt = `Extract the job posting text from this screenshot for a job-search assistant.
+
+Rules:
+- Return only visible text from the screenshot.
+- Preserve role requirements, qualifications, responsibilities, company, location, deadline, and application instructions when visible.
+- Do not invent missing text.
+- If the screenshot is cropped or unclear, include that in sourceNotes.
+- If company or role is not visible, return an empty string for that field.
+- Keep jobText readable for a human to review before analysis.
+
+File name: ${String(fileName || 'job-screenshot').slice(0, 120)}`;
+
+    inputCharacterCount = prompt.length + normalizedBase64.length;
+    assertCostGuard(prompt.length, { allowInputOverride: true });
+    const ai = getGenAIClient(requestGeminiApiKey);
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [
+        { text: prompt },
+        {
+          inlineData: {
+            data: normalizedBase64,
+            mimeType: resolvedMimeType
+          }
+        }
+      ],
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            jobText: { type: Type.STRING, description: 'Readable job posting text extracted from the screenshot.' },
+            company: { type: Type.STRING, description: 'Company name visible in the screenshot, or empty string.' },
+            role: { type: Type.STRING, description: 'Role title visible in the screenshot, or empty string.' },
+            sourceNotes: { type: Type.STRING, description: 'Short note about OCR quality, cropped content, or missing visible fields.' },
+            confidence: { type: Type.NUMBER, description: 'Extraction confidence from 0 to 1.' }
+          },
+          required: ['jobText', 'company', 'role', 'sourceNotes', 'confidence']
+        }
+      }
+    });
+
+    const parsedData = JSON.parse(response.text || '{}');
+    const outputCharacterCount = response.text?.length || JSON.stringify(parsedData).length;
+    recordAiUsage({
+      featureName: 'Extract Job Screenshot',
+      endpointName: '/api/extract-job-screenshot',
+      model: GEMINI_MODEL,
+      inputCharacterCount,
+      outputCharacterCount,
+      durationMs: Date.now() - startedAt,
+      cacheStatus: 'miss',
+      ...tokenUsageFromResponse(response, inputCharacterCount, outputCharacterCount),
+      status: 'success'
+    });
+    res.json({
+      jobText: String(parsedData.jobText || '').slice(0, MAX_JOB_TEXT_CHARS),
+      company: String(parsedData.company || ''),
+      role: String(parsedData.role || ''),
+      sourceNotes: String(parsedData.sourceNotes || ''),
+      confidence: Number(parsedData.confidence || 0),
+      fileName: fileName || 'job-screenshot',
+      imageBytes: imageBuffer.length,
+      jobTextWasTruncated: String(parsedData.jobText || '').length > MAX_JOB_TEXT_CHARS
+    });
+  } catch (error) {
+    console.error('Job screenshot extraction error:', error);
+    recordAiUsage({
+      featureName: 'Extract Job Screenshot',
+      endpointName: '/api/extract-job-screenshot',
+      model: GEMINI_MODEL,
+      inputCharacterCount,
+      outputCharacterCount: 0,
+      estimatedInputTokens: estimateTokensFromChars(inputCharacterCount),
+      estimatedOutputTokens: 0,
+      estimatedTotalTokens: estimateTokensFromChars(inputCharacterCount),
+      tokenCountSource: 'estimated',
+      durationMs: Date.now() - startedAt,
+      cacheStatus: 'blocked',
+      status: 'error',
+      errorMessage: error instanceof Error ? error.message : String(error)
+    });
     res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
