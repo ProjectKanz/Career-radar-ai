@@ -1066,7 +1066,7 @@ function planCertificationEvidence(
 
   const accepted = Array.from(acceptedByKey.values())
     .sort((a, b) => (a.priority || 99) - (b.priority || 99))
-    .slice(0, 4);
+    .slice(0, 8);
   const longList = accepted.map((item) => item.finalText || '').filter(Boolean);
   const longString = longList.join(' | ');
   const compressionMode = longString.length > 210 || wordCount(longString) > 30;
@@ -1168,6 +1168,12 @@ function buildCvTailoringFramework(input: {
 
 const cvFieldLimits: Record<string, number> = {
   professionalSummary: 85,
+  workExperienceSection: 220,
+  organizationalExperienceSection: 160,
+  projectSection: 160,
+  certificationSection: 70,
+  achievementSection: 80,
+  skillsSection: 70,
   experience1Title: 12,
   experience1Organization: 12,
   experience1Date: 10,
@@ -1186,7 +1192,7 @@ const cvFieldLimits: Record<string, number> = {
   project2Bullet1: 32,
   project3Title: 12,
   project3Bullet1: 32,
-  certifications: 60,
+  certifications: 80,
   achievementBullet1: 22,
   achievementBullet2: 22,
   achievementBullet3: 22,
@@ -1194,6 +1200,47 @@ const cvFieldLimits: Record<string, number> = {
   softSkills: 30,
   languages: 18
 };
+
+function usableCvValue(value: unknown, warning: string) {
+  const cleaned = String(value || '').trim();
+  return cleaned && cleaned !== warning;
+}
+
+function sectionLinesFromNumberedFields(
+  fields: Record<string, string>,
+  prefix: string,
+  slotCount: number,
+  bulletCount: number,
+  warning: string
+) {
+  const lines: string[] = [];
+  for (let slot = 1; slot <= slotCount; slot += 1) {
+    const title = fields[`${prefix}${slot}Title`];
+    const organization = fields[`${prefix}${slot}Organization`];
+    const date = fields[`${prefix}${slot}Date`];
+    const heading = [title, organization, date].filter((item) => usableCvValue(item, warning)).join(' | ');
+    const bullets: string[] = [];
+    for (let bulletIndex = 1; bulletIndex <= bulletCount; bulletIndex += 1) {
+      const bullet = fields[`${prefix}${slot}Bullet${bulletIndex}`];
+      if (usableCvValue(bullet, warning)) bullets.push(`- ${bullet}`);
+    }
+    if (heading || bullets.length > 0) {
+      if (heading) lines.push(heading);
+      lines.push(...bullets);
+      lines.push('');
+    }
+  }
+  return lines.join('\n').trim();
+}
+
+function sectionLinesFromBullets(fields: Record<string, string>, prefix: string, count: number, warning: string) {
+  const lines: string[] = [];
+  for (let index = 1; index <= count; index += 1) {
+    const value = fields[`${prefix}${index}`];
+    if (usableCvValue(value, warning)) lines.push(`- ${value}`);
+  }
+  return lines.join('\n').trim();
+}
 
 function estimateOnePageRisk(fields: Record<string, string>) {
   const totalWords = Object.values(fields).reduce((sum, value) => sum + wordCount(value), 0);
@@ -1240,11 +1287,34 @@ function normalizeGeneratedCvFields(
     .join(' | ');
   normalized.certifications = dynamicCertifications || normalized.certifications || warning;
 
-  certificationBullets.slice(0, 4).forEach((item, index) => {
+  certificationBullets.slice(0, 8).forEach((item, index) => {
     if (item) {
       normalized[`certificationBullet${index + 1}`] = softenRiskyLanguage(item);
     }
   });
+
+  normalized.workExperienceSection = usableCvValue(normalized.workExperienceSection, warning)
+    ? normalized.workExperienceSection
+    : sectionLinesFromNumberedFields(normalized, 'experience', 4, 5, warning) || warning;
+  normalized.organizationalExperienceSection = usableCvValue(normalized.organizationalExperienceSection, warning)
+    ? normalized.organizationalExperienceSection
+    : sectionLinesFromNumberedFields(normalized, 'organization', 3, 5, warning) || warning;
+  normalized.projectSection = usableCvValue(normalized.projectSection, warning)
+    ? normalized.projectSection
+    : sectionLinesFromNumberedFields(normalized, 'project', 4, 5, warning) || warning;
+  normalized.certificationSection = usableCvValue(normalized.certificationSection, warning)
+    ? normalized.certificationSection
+    : (certificationBullets.length ? certificationBullets.map((item) => `- ${softenRiskyLanguage(item)}`).join('\n') : sectionLinesFromBullets(normalized, 'certificationBullet', 8, warning)) || warning;
+  normalized.achievementSection = usableCvValue(normalized.achievementSection, warning)
+    ? normalized.achievementSection
+    : sectionLinesFromBullets(normalized, 'achievementBullet', 5, warning) || warning;
+  normalized.skillsSection = usableCvValue(normalized.skillsSection, warning)
+    ? normalized.skillsSection
+    : [
+      usableCvValue(normalized.hardSkills, warning) ? `Hard Skills: ${normalized.hardSkills}` : '',
+      usableCvValue(normalized.softSkills, warning) ? `Soft Skills: ${normalized.softSkills}` : '',
+      usableCvValue(normalized.languages, warning) ? `Languages: ${normalized.languages}` : ''
+    ].filter(Boolean).join('\n') || warning;
 
   return normalized;
 }
@@ -1426,9 +1496,11 @@ function normalizeEvidenceCategory(value: unknown) {
 function evidenceDraftKey(value: Record<string, unknown>) {
   return [
     normalizeEvidenceCategory(value.category),
+    value.sourceGroup,
     value.title,
     value.organization,
-    value.sourceSection
+    value.sourceSection,
+    value.description
   ].map((item) => String(item || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).join('|');
 }
 
@@ -1443,11 +1515,12 @@ function normalizeOnboardingResult(value: Record<string, unknown>) {
         return {
           ...item,
           category: normalizeEvidenceCategory(item.category),
-          title: String(item.title || '').trim(),
-          organization: String(item.organization || '').trim(),
-          description: String(item.description || '').trim(),
-          sourceSection: String(item.sourceSection || '').trim(),
-          confidence: Number(item.confidence || 0),
+      title: String(item.title || '').trim(),
+      organization: String(item.organization || '').trim(),
+      description: String(item.description || '').trim(),
+      sourceGroup: String(item.sourceGroup || '').trim(),
+      sourceSection: String(item.sourceSection || '').trim(),
+      confidence: Number(item.confidence || 0),
           inferredSkillTags: Array.isArray(item.inferredSkillTags)
             ? item.inferredSkillTags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 8)
             : []
@@ -1489,40 +1562,29 @@ EDUCATION
 {{EDUCATION}}
 
 WORK EXPERIENCE
-{{EXPERIENCE_1_TITLE}} - {{EXPERIENCE_1_ORGANIZATION}}
-{{EXPERIENCE_1_DATE}}
-- {{EXPERIENCE_1_BULLET_1}}
-- {{EXPERIENCE_1_BULLET_2}}
-- {{EXPERIENCE_1_BULLET_3}}
+{{WORK_EXPERIENCE_SECTION}}
 
-{{EXPERIENCE_2_TITLE}} - {{EXPERIENCE_2_ORGANIZATION}}
-{{EXPERIENCE_2_DATE}}
-- {{EXPERIENCE_2_BULLET_1}}
-- {{EXPERIENCE_2_BULLET_2}}
-- {{EXPERIENCE_2_BULLET_3}}
+ORGANIZATIONAL EXPERIENCE
+{{ORGANIZATIONAL_EXPERIENCE_SECTION}}
 
-PROJECT / PORTFOLIO
-{{PROJECT_1_TITLE}}
-- {{PROJECT_1_BULLET_1}}
-
-{{PROJECT_2_TITLE}}
-- {{PROJECT_2_BULLET_1}}
-
-{{PROJECT_3_TITLE}}
-- {{PROJECT_3_BULLET_1}}
+PROJECT / PORTFOLIO / VOLUNTEERING
+{{PROJECT_SECTION}}
 
 CERTIFICATIONS
-{{CERTIFICATIONS}}
+{{CERTIFICATION_SECTION}}
 
 ACHIEVEMENTS
-- {{ACHIEVEMENT_BULLET_1}}
-- {{ACHIEVEMENT_BULLET_2}}
-- {{ACHIEVEMENT_BULLET_3}}
+{{ACHIEVEMENT_SECTION}}
 
 SKILLS & LANGUAGES
-Hard Skills: {{HARD_SKILLS}}
-Soft Skills: {{SOFT_SKILLS}}
-Languages: {{LANGUAGES}}
+{{SKILLS_SECTION}}
+
+NUMBERED PLACEHOLDERS FOR CUSTOM LAYOUTS
+Work: {{EXPERIENCE_1_TITLE}} | {{EXPERIENCE_1_ORGANIZATION}} | {{EXPERIENCE_1_DATE}} | {{EXPERIENCE_1_BULLET_1}} | {{EXPERIENCE_1_BULLET_2}} | {{EXPERIENCE_1_BULLET_3}} | {{EXPERIENCE_1_BULLET_4}} | {{EXPERIENCE_1_BULLET_5}}
+Organization: {{ORGANIZATION_1_TITLE}} | {{ORGANIZATION_1_ORGANIZATION}} | {{ORGANIZATION_1_DATE}} | {{ORGANIZATION_1_BULLET_1}} | {{ORGANIZATION_1_BULLET_2}} | {{ORGANIZATION_1_BULLET_3}} | {{ORGANIZATION_1_BULLET_4}} | {{ORGANIZATION_1_BULLET_5}}
+Project: {{PROJECT_1_TITLE}} | {{PROJECT_1_BULLET_1}} | {{PROJECT_1_BULLET_2}} | {{PROJECT_1_BULLET_3}} | {{PROJECT_1_BULLET_4}} | {{PROJECT_1_BULLET_5}}
+Certification bullets: {{CERTIFICATION_BULLET_1}} | {{CERTIFICATION_BULLET_2}} | {{CERTIFICATION_BULLET_3}} | {{CERTIFICATION_BULLET_4}} | {{CERTIFICATION_BULLET_5}} | {{CERTIFICATION_BULLET_6}} | {{CERTIFICATION_BULLET_7}} | {{CERTIFICATION_BULLET_8}}
+Achievement bullets: {{ACHIEVEMENT_BULLET_1}} | {{ACHIEVEMENT_BULLET_2}} | {{ACHIEVEMENT_BULLET_3}} | {{ACHIEVEMENT_BULLET_4}} | {{ACHIEVEMENT_BULLET_5}}
 
 Source: ${sourceName || 'CareerRadar CV onboarding'}`;
 }
@@ -1548,6 +1610,7 @@ function onboardingSchema() {
       title: { type: Type.STRING },
       organization: { type: Type.STRING },
       description: { type: Type.STRING },
+      sourceGroup: { type: Type.STRING },
       sourceSection: { type: Type.STRING },
       confidence: { type: Type.NUMBER },
       inferredSkillTags: {
@@ -1555,7 +1618,7 @@ function onboardingSchema() {
         items: { type: Type.STRING }
       }
     },
-    required: ['category', 'title', 'organization', 'description', 'sourceSection', 'confidence', 'inferredSkillTags']
+    required: ['category', 'title', 'organization', 'description', 'sourceGroup', 'sourceSection', 'confidence', 'inferredSkillTags']
   };
 
   return {
@@ -1726,18 +1789,28 @@ Task:
 - Evidence drafts must be based only on text present in the CV.
 - Evidence drafts are not verified. Use conservative wording and confidence 0-1.
 - Evidence draft category must be one of: Work Achievement, Academic Honor, Side Project / Portfolio, Certification, Hard Skill / Technical Fact, Other Highlight.
+- Each evidence draft must represent exactly one CV claim or one CV bullet.
+- Do not combine multiple bullets, responsibilities, metrics, tools, awards, certificates, or outcomes in one evidence draft.
+- If one role has three useful bullets, return three evidence drafts with the same organization but different claim titles and descriptions.
+- For sourceGroup, use the source CV item that groups related claims, such as "Rima Synergy Global - Social Media Specialist" or "Meraciklatte - Marketing Officer". Keep the same sourceGroup for multiple bullets from the same role/project/certificate.
+- For sourceSection, use the broader CV section name, such as "Work Experience", "Education", "Organization", or "Skills".
+- Do not create evidence drafts only for job title, organization, or date unless that field itself is a verifiable qualification.
+- Use general claim titles that a non-technical user can understand, such as "Monthly content production" or "E-commerce campaign monitoring".
 - Do not infer business impact. If the CV says "closed IDR 12 million in deals", do not add "contributed to revenue growth" unless that exact causal claim appears.
 - Prefer wording that stays close to the original CV text, with light cleanup only.
-- Avoid creating two evidence drafts for the same fact, certificate, award, role, or project.
+- Avoid creating two evidence drafts for the same exact fact, certificate, award, or bullet. Multiple different bullets from the same role are allowed and expected.
 
 Source name: ${sourceName || 'Uploaded CV'}
 
 Generic placeholder rules:
-- Use experience1/experience2 for strongest work or internship items.
-- Use project1/project2/project3 for strongest project or portfolio items.
+- Use experience1 through experience4 for formal work or internship items when the source CV has them.
+- Use organization1 through organization3 for student organizations, committees, clubs, campus leadership, and non-employment leadership.
+- Use project1/project2/project3/project4 for strongest project, portfolio, volunteering, community, or event items.
+- Also return dynamic plain-text sections when enough evidence exists: workExperienceSection, organizationalExperienceSection, projectSection, certificationSection, achievementSection, and skillsSection.
 - Keep bullets one sentence and concise.
 - Certifications must contain only real certificates, courses, licenses, or language scores.
 - Achievements contain awards, competitions, and measurable extracurricular outcomes.
+- If the original CV has bullet-list certifications, split them into certificationBullet1 through certificationBullet8 and certificationSection. Do not collapse distinct credentials into one certification bullet.
 
 CV text:
 ${text}
@@ -1749,8 +1822,7 @@ ${text}
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
-        responseMimeType: 'application/json',
-        responseSchema: onboardingSchema()
+        responseMimeType: 'application/json'
       }
     });
 
@@ -1789,37 +1861,13 @@ ${text}
   }
 });
 
+function fieldKeyToPlaceholder(key: string) {
+  return `{{${key.replace(/([a-z])([A-Z])/g, '$1_$2').replace(/([a-zA-Z])(\d)/g, '$1_$2').toUpperCase()}}}`;
+}
+
 function sourceValuePlaceholderPairs(templateFields: Record<string, string>) {
-  const pairs: [string, string][] = [
-    [templateFields.targetTitle, '{{TARGET_TITLE}}'],
-    [templateFields.professionalSummary, '{{PROFESSIONAL_SUMMARY}}'],
-    [templateFields.education, '{{EDUCATION}}'],
-    [templateFields.experience1Title, '{{EXPERIENCE_1_TITLE}}'],
-    [templateFields.experience1Organization, '{{EXPERIENCE_1_ORGANIZATION}}'],
-    [templateFields.experience1Date, '{{EXPERIENCE_1_DATE}}'],
-    [templateFields.experience1Bullet1, '{{EXPERIENCE_1_BULLET_1}}'],
-    [templateFields.experience1Bullet2, '{{EXPERIENCE_1_BULLET_2}}'],
-    [templateFields.experience1Bullet3, '{{EXPERIENCE_1_BULLET_3}}'],
-    [templateFields.experience2Title, '{{EXPERIENCE_2_TITLE}}'],
-    [templateFields.experience2Organization, '{{EXPERIENCE_2_ORGANIZATION}}'],
-    [templateFields.experience2Date, '{{EXPERIENCE_2_DATE}}'],
-    [templateFields.experience2Bullet1, '{{EXPERIENCE_2_BULLET_1}}'],
-    [templateFields.experience2Bullet2, '{{EXPERIENCE_2_BULLET_2}}'],
-    [templateFields.experience2Bullet3, '{{EXPERIENCE_2_BULLET_3}}'],
-    [templateFields.project1Title, '{{PROJECT_1_TITLE}}'],
-    [templateFields.project1Bullet1, '{{PROJECT_1_BULLET_1}}'],
-    [templateFields.project2Title, '{{PROJECT_2_TITLE}}'],
-    [templateFields.project2Bullet1, '{{PROJECT_2_BULLET_1}}'],
-    [templateFields.project3Title, '{{PROJECT_3_TITLE}}'],
-    [templateFields.project3Bullet1, '{{PROJECT_3_BULLET_1}}'],
-    [templateFields.certifications, '{{CERTIFICATIONS}}'],
-    [templateFields.achievementBullet1, '{{ACHIEVEMENT_BULLET_1}}'],
-    [templateFields.achievementBullet2, '{{ACHIEVEMENT_BULLET_2}}'],
-    [templateFields.achievementBullet3, '{{ACHIEVEMENT_BULLET_3}}'],
-    [templateFields.hardSkills, '{{HARD_SKILLS}}'],
-    [templateFields.softSkills, '{{SOFT_SKILLS}}'],
-    [templateFields.languages, '{{LANGUAGES}}']
-  ];
+  const pairs: [string, string][] = Object.entries(templateFields || {})
+    .map(([key, value]) => [String(value || ''), fieldKeyToPlaceholder(key)] as [string, string]);
   const seen = new Set<string>();
   return pairs
     .map(([value, placeholder]) => [String(value || '').trim(), placeholder] as [string, string])
@@ -2277,7 +2325,7 @@ app.post('/api/analyze-job', analyzeLimiter, async (req, res) => {
                 properties: {
                   cvSection: { type: Type.STRING, description: 'Target section on resume (e.g. Work History, Projects, Skills).' },
                   editType: { type: Type.STRING, description: 'Type of change needed (e.g., Target metric, Insert tech keywords).' },
-                  sourceEvidence: { type: Type.STRING, description: 'How to map the existing candidate evidence (e.g. CSA-01 Project) into the rewrite.' },
+                  sourceEvidence: { type: Type.STRING, description: 'How to map the existing candidate evidence (e.g. WRK-001-001 work claim) into the rewrite.' },
                   finalSuggestedText: { type: Type.STRING, description: 'Complete high-quality tailored text block suggested for copy-pasting.' },
                   whyTheChangeMatters: { type: Type.STRING, description: 'Explanation of strategic advantage or why this keyword gets past ATS screens.' },
                   priority: { type: Type.STRING, enum: ['High', 'Medium', 'Low'], description: 'Urgency of item.' },
@@ -2477,52 +2525,127 @@ app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
     const prompt = `
 You are a strict ATS CV tailoring assistant. Return structured JSON only.
 
-The user has an original ATS CV template. Do NOT create a new CV layout. Fill only these fixed template fields:
+The user has an original ATS CV template. Do NOT create a new CV layout. Fill only these supported template fields:
 - targetTitle
 - professionalSummary
+- workExperienceSection
+- organizationalExperienceSection
+- projectSection
+- certificationSection
+- achievementSection
+- skillsSection
 - experience1Title
 - experience1Organization
 - experience1Date
 - experience1Bullet1
 - experience1Bullet2
 - experience1Bullet3
+- experience1Bullet4
+- experience1Bullet5
 - experience2Title
 - experience2Organization
 - experience2Date
 - experience2Bullet1
 - experience2Bullet2
 - experience2Bullet3
+- experience2Bullet4
+- experience2Bullet5
+- experience3Title
+- experience3Organization
+- experience3Date
+- experience3Bullet1
+- experience3Bullet2
+- experience3Bullet3
+- experience3Bullet4
+- experience3Bullet5
+- experience4Title
+- experience4Organization
+- experience4Date
+- experience4Bullet1
+- experience4Bullet2
+- experience4Bullet3
+- experience4Bullet4
+- experience4Bullet5
+- organization1Title
+- organization1Organization
+- organization1Date
+- organization1Bullet1
+- organization1Bullet2
+- organization1Bullet3
+- organization1Bullet4
+- organization1Bullet5
+- organization2Title
+- organization2Organization
+- organization2Date
+- organization2Bullet1
+- organization2Bullet2
+- organization2Bullet3
+- organization2Bullet4
+- organization2Bullet5
+- organization3Title
+- organization3Organization
+- organization3Date
+- organization3Bullet1
+- organization3Bullet2
+- organization3Bullet3
+- organization3Bullet4
+- organization3Bullet5
 - project1Title
 - project1Bullet1
+- project1Bullet2
+- project1Bullet3
+- project1Bullet4
+- project1Bullet5
 - project2Title
 - project2Bullet1
+- project2Bullet2
+- project2Bullet3
+- project2Bullet4
+- project2Bullet5
 - project3Title
 - project3Bullet1
+- project3Bullet2
+- project3Bullet3
+- project3Bullet4
+- project3Bullet5
+- project4Title
+- project4Bullet1
+- project4Bullet2
+- project4Bullet3
+- project4Bullet4
+- project4Bullet5
 - certifications
 - certificationBullet1
 - certificationBullet2
 - certificationBullet3
 - certificationBullet4
+- certificationBullet5
+- certificationBullet6
+- certificationBullet7
+- certificationBullet8
 - achievementBullet1
 - achievementBullet2
 - achievementBullet3
+- achievementBullet4
+- achievementBullet5
 - hardSkills
 - softSkills
 - languages
 
-Fixed final CV layout:
+Flexible final CV layout:
 1. NAME + CONTACT
 2. TARGET TITLE
 3. PROFESSIONAL SUMMARY
 4. EDUCATION
 5. WORK EXPERIENCE
-   - Experience slot 1 from the strongest verified work evidence
-   - Experience slot 2 from the next strongest verified work/internship evidence
-6. PROJECT / PORTFOLIO
-   - Project slots from the strongest verified project/portfolio evidence
-7. CERTIFICATIONS
-8. ACHIEVEMENTS
-9. SKILLS & LANGUAGES
+   - Use experience1 through experience4 for formal work, internship, freelance, assistant, and business roles.
+6. ORGANIZATIONAL EXPERIENCE
+   - Use organization1 through organization3 for campus organizations, committees, clubs, student leadership, and internal control roles.
+7. PROJECT / PORTFOLIO / VOLUNTEERING
+   - Use project1 through project4 for projects, volunteering, community programs, portfolio, and event execution.
+8. CERTIFICATIONS
+9. ACHIEVEMENTS
+10. SKILLS & LANGUAGES
 
 Rules:
 - Do not invent credentials, employers, education, dates, certificates, languages, or achievements.
@@ -2532,9 +2655,11 @@ Rules:
 - If a field cannot be supported by verified profile/evidence/checklist data, return exactly "${warning}".
 - Aim for a one-page CV. Summary must be 65-85 words maximum. Work bullets must be one sentence, 18-28 words. Each project bullet must be one sentence, 22-32 words.
 - Experience titles, organizations, and dates must be copied or safely summarized from verified evidence/profile only. Do not invent companies, roles, or dates.
+- Dynamic section fields must be plain text with one heading line followed by hyphen bullets. Use them for templates with variable-length sections.
 - Preferred certification output is certifications for the dynamic {{CERTIFICATIONS}} placeholder.
 - certifications must be one compact pipe-separated string built from Recommended certification dynamic section exactly.
-- certificationBullet1 through certificationBullet4 are legacy compatibility fields only. Fill them with the first four certification items, but do not limit certifications to four items.
+- certificationSection should include all selected verified certification items as hyphen bullets.
+- certificationBullet1 through certificationBullet8 are compatibility fields. Fill them with the first eight certification items, but do not limit certifications to old one-item templates.
 - Never place competitions, achievements, work experience, projects, or portfolio items in Certifications. Those belong in Achievements, Experience, or Project sections.
 - If onePageCompressionMode is true in the framework, use the compact final certification text exactly and avoid adding extra detail.
 - Skills must be compact comma-separated or pipe-separated phrases.
@@ -2547,7 +2672,8 @@ Rules:
 - Follow certification priority when choosing certification and achievement emphasis.
 - If English/TOEFL is required and verified English score evidence exists, put it first in Certifications.
 - Move role alignment into professionalSummary or relevant work/project bullet.
-- Use project1 through project3 for the strongest verified project evidence when present. Do not add project names or AI productivity claims unless they exist in verified evidence.
+- Use organizational placeholders for student organization/campus leadership evidence, not project placeholders.
+- Use project1 through project4 for the strongest verified project, portfolio, volunteering, or community evidence when present. Do not add project names or AI productivity claims unless they exist in verified evidence.
 - Do not include application notes, cover-letter language, recruiter outreach, or explanation.
 - Do not include sections named Targeted Experience Highlights, Role Alignment, or Application Notes.
 - Tailor wording to the selected company and role while staying truthful.
@@ -2657,76 +2783,7 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            targetTitle: { type: Type.STRING },
-            professionalSummary: { type: Type.STRING },
-            experience1Title: { type: Type.STRING },
-            experience1Organization: { type: Type.STRING },
-            experience1Date: { type: Type.STRING },
-            experience1Bullet1: { type: Type.STRING },
-            experience1Bullet2: { type: Type.STRING },
-            experience1Bullet3: { type: Type.STRING },
-            experience2Title: { type: Type.STRING },
-            experience2Organization: { type: Type.STRING },
-            experience2Date: { type: Type.STRING },
-            experience2Bullet1: { type: Type.STRING },
-            experience2Bullet2: { type: Type.STRING },
-            experience2Bullet3: { type: Type.STRING },
-            project1Title: { type: Type.STRING },
-            project1Bullet1: { type: Type.STRING },
-            project2Title: { type: Type.STRING },
-            project2Bullet1: { type: Type.STRING },
-            project3Title: { type: Type.STRING },
-            project3Bullet1: { type: Type.STRING },
-            certifications: { type: Type.STRING },
-            certificationBullet1: { type: Type.STRING },
-            certificationBullet2: { type: Type.STRING },
-            certificationBullet3: { type: Type.STRING },
-            certificationBullet4: { type: Type.STRING },
-            achievementBullet1: { type: Type.STRING },
-            achievementBullet2: { type: Type.STRING },
-            achievementBullet3: { type: Type.STRING },
-            hardSkills: { type: Type.STRING },
-            softSkills: { type: Type.STRING },
-            languages: { type: Type.STRING }
-          },
-          required: [
-            'targetTitle',
-            'professionalSummary',
-            'experience1Title',
-            'experience1Organization',
-            'experience1Date',
-            'experience1Bullet1',
-            'experience1Bullet2',
-            'experience1Bullet3',
-            'experience2Title',
-            'experience2Organization',
-            'experience2Date',
-            'experience2Bullet1',
-            'experience2Bullet2',
-            'experience2Bullet3',
-            'project1Title',
-            'project1Bullet1',
-            'project2Title',
-            'project2Bullet1',
-            'project3Title',
-            'project3Bullet1',
-            'certifications',
-            'certificationBullet1',
-            'certificationBullet2',
-            'certificationBullet3',
-            'certificationBullet4',
-            'achievementBullet1',
-            'achievementBullet2',
-            'achievementBullet3',
-            'hardSkills',
-            'softSkills',
-            'languages'
-          ]
-        }
+        responseMimeType: 'application/json'
       }
     });
 

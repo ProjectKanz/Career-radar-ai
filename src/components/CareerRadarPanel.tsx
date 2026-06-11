@@ -608,7 +608,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
             <span>AI Career Radar Matching Engine</span>
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Paste a job posting below. Gemini will extract its Technical DNA and ground it against your Experience Fact-Bank.
+            Paste a job posting below. Gemini will extract its Technical DNA and ground it against your CV Evidence Bank.
           </p>
         </div>
       </div>
@@ -657,7 +657,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
               <>
                 <h4 className="font-bold text-sm">Profile Context Needed</h4>
                 <p className="text-xs text-orange-700 mt-1">
-                  Fill <strong>Candidate Profile Context</strong> and add at least a few items in <strong>CV Evidence Fact-Bank</strong> before real AI matching. You can still use Dry Run to preview request size for free.
+                  Fill <strong>Candidate Profile Context</strong> and add at least a few items in <strong>CV Evidence Bank</strong> before real AI matching. You can still use Dry Run to preview request size for free.
                 </p>
               </>
             )}

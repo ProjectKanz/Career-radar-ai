@@ -43,6 +43,7 @@ interface OnboardingEvidenceDraft {
   title: string;
   organization: string;
   description: string;
+  sourceGroup?: string;
   sourceSection: string;
   confidence: number;
   inferredSkillTags: string[];
@@ -94,28 +95,36 @@ const EVIDENCE_CATEGORIES = [
 const PLACEHOLDER_CHECKLIST = [
   '{{TARGET_TITLE}}',
   '{{PROFESSIONAL_SUMMARY}}',
+  '{{WORK_EXPERIENCE_SECTION}}',
+  '{{ORGANIZATIONAL_EXPERIENCE_SECTION}}',
+  '{{PROJECT_SECTION}}',
+  '{{CERTIFICATION_SECTION}}',
+  '{{ACHIEVEMENT_SECTION}}',
+  '{{SKILLS_SECTION}}',
   '{{EXPERIENCE_1_TITLE}}',
   '{{EXPERIENCE_1_ORGANIZATION}}',
   '{{EXPERIENCE_1_DATE}}',
   '{{EXPERIENCE_1_BULLET_1}}',
   '{{EXPERIENCE_1_BULLET_2}}',
   '{{EXPERIENCE_1_BULLET_3}}',
-  '{{EXPERIENCE_2_TITLE}}',
-  '{{EXPERIENCE_2_ORGANIZATION}}',
-  '{{EXPERIENCE_2_DATE}}',
-  '{{EXPERIENCE_2_BULLET_1}}',
-  '{{EXPERIENCE_2_BULLET_2}}',
-  '{{EXPERIENCE_2_BULLET_3}}',
+  '{{EXPERIENCE_3_TITLE}}',
+  '{{EXPERIENCE_3_BULLET_1}}',
+  '{{ORGANIZATION_1_TITLE}}',
+  '{{ORGANIZATION_1_ORGANIZATION}}',
+  '{{ORGANIZATION_1_DATE}}',
+  '{{ORGANIZATION_1_BULLET_1}}',
+  '{{ORGANIZATION_1_BULLET_5}}',
   '{{PROJECT_1_TITLE}}',
   '{{PROJECT_1_BULLET_1}}',
-  '{{PROJECT_2_TITLE}}',
-  '{{PROJECT_2_BULLET_1}}',
-  '{{PROJECT_3_TITLE}}',
-  '{{PROJECT_3_BULLET_1}}',
+  '{{PROJECT_1_BULLET_5}}',
   '{{CERTIFICATIONS}}',
+  '{{CERTIFICATION_BULLET_1}}',
+  '{{CERTIFICATION_BULLET_8}}',
   '{{ACHIEVEMENT_BULLET_1}}',
+  '{{ACHIEVEMENT_BULLET_5}}',
   '{{HARD_SKILLS}}',
-  '{{SOFT_SKILLS}}'
+  '{{SOFT_SKILLS}}',
+  '{{LANGUAGES}}'
 ];
 
 function cvSourceLabel(sourceType: CvSourceType) {
@@ -136,8 +145,54 @@ function friendlyError(error: unknown) {
   return String(error || 'Something went wrong.');
 }
 
-function draftEvidenceId(index: number, runStamp: number) {
-  return `ONB-${runStamp.toString(36).toUpperCase()}-${String(index + 1).padStart(2, '0')}`;
+function evidenceIdPrefix(category: string) {
+  if (category === 'Work Achievement') return 'WRK';
+  if (category === 'Academic Honor') return 'EDU';
+  if (category === 'Side Project / Portfolio') return 'PRJ';
+  if (category === 'Certification') return 'CRT';
+  if (category === 'Hard Skill / Technical Fact') return 'SKL';
+  return 'OTH';
+}
+
+function padEvidenceNumber(value: number) {
+  return String(value).padStart(3, '0');
+}
+
+function evidenceCoreDescription(value: unknown) {
+  return String(value || '')
+    .replace(/\nSkill tags:[\s\S]*$/m, '')
+    .replace(/\nSource section:[\s\S]*$/m, '')
+    .trim();
+}
+
+function normalizeEvidenceGroupKey(value: Pick<CVEvidence, 'category' | 'title' | 'organization'> & { sourceGroup?: string; sourceSection?: string }) {
+  return [
+    value.category,
+    value.organization || '',
+    value.sourceGroup || value.sourceSection || String(value.title || '').split(/\s+-\s+/)[0] || value.title
+  ].map((item) => String(item || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).join('|');
+}
+
+function buildDraftEvidenceId(
+  draft: OnboardingEvidenceDraft,
+  prefixMaxGroup: Map<string, number>,
+  groupNumbers: Map<string, number>,
+  itemNumbers: Map<string, number>
+) {
+  const prefix = evidenceIdPrefix(draft.category);
+  const groupKey = `${prefix}|${normalizeEvidenceGroupKey(draft)}`;
+  let groupNumber = groupNumbers.get(groupKey);
+  if (!groupNumber) {
+    groupNumber = (prefixMaxGroup.get(prefix) || 0) + 1;
+    prefixMaxGroup.set(prefix, groupNumber);
+    groupNumbers.set(groupKey, groupNumber);
+  }
+
+  const itemKey = `${prefix}|${groupNumber}`;
+  const itemNumber = (itemNumbers.get(itemKey) || 0) + 1;
+  itemNumbers.set(itemKey, itemNumber);
+
+  return `${prefix}-${padEvidenceNumber(groupNumber)}-${padEvidenceNumber(itemNumber)}`;
 }
 
 function cleanDraftValue(value: unknown) {
@@ -145,12 +200,14 @@ function cleanDraftValue(value: unknown) {
   return cleaned && cleaned !== '[Needs verified input]' ? cleaned : '';
 }
 
-function normalizeEvidenceKey(value: Pick<CVEvidence, 'category' | 'title' | 'organization'> & { sourceSection?: string }) {
+function normalizeEvidenceKey(value: Pick<CVEvidence, 'category' | 'title' | 'organization'> & { sourceGroup?: string; sourceSection?: string; description?: string }) {
   return [
     value.category,
+    value.sourceGroup || '',
     value.title,
     value.organization || '',
-    value.sourceSection || ''
+    value.sourceSection || '',
+    evidenceCoreDescription(value.description)
   ].map((item) => String(item || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).join('|');
 }
 
@@ -338,7 +395,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
         })
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Gemini could not build CV onboarding drafts.');
+      if (!response.ok) throw new Error(data.error || 'Gemini could not build CV onboarding claims.');
 
       const result = data as OnboardingResult;
       setOnboardingResult(result);
@@ -346,7 +403,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
         ...draft,
         selected: true
       })));
-      setWizardMessage('Generated placeholder mapping and evidence drafts. Review before saving.');
+      setWizardMessage('Generated placeholder mapping and one-claim evidence items. Review before saving.');
     } catch (err) {
       setWizardError(friendlyError(err));
     } finally {
@@ -416,7 +473,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
   const handleSaveEvidenceDrafts = async () => {
     const selectedDrafts = evidenceDrafts.filter((draft) => draft.selected && draft.title.trim() && draft.description.trim());
     if (selectedDrafts.length === 0) {
-      setWizardError('Select at least one evidence draft with a title and description.');
+      setWizardError('Select at least one evidence claim with a title and description.');
       return;
     }
 
@@ -426,26 +483,37 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
 
     try {
       const now = new Date().toISOString();
-      const runStamp = Date.now();
       const evidenceCollectionPath = `profiles/${userId}/cv_evidences`;
       const existingSnapshot = await getDocsFromServer(collection(db, evidenceCollectionPath));
       const existingKeys = new Set<string>();
+      const prefixMaxGroup = new Map<string, number>();
       existingSnapshot.forEach((item) => {
         const data = item.data() as CVEvidence;
+        const idMatch = String(data.evidenceId || '').match(/^([A-Z]{3})-(\d{3})-(\d{3})$/);
+        if (idMatch) {
+          const prefix = idMatch[1];
+          const groupNumber = Number(idMatch[2]);
+          prefixMaxGroup.set(prefix, Math.max(prefixMaxGroup.get(prefix) || 0, groupNumber));
+        }
+        const sourceGroupMatch = String(data.description || '').match(/Source group:\s*(.+)$/m);
         const sourceMatch = String(data.description || '').match(/Source section:\s*(.+)$/m);
         existingKeys.add(normalizeEvidenceKey({
           category: data.category,
           title: data.title,
           organization: data.organization || '',
-          sourceSection: sourceMatch?.[1] || ''
+          sourceGroup: sourceGroupMatch?.[1] || '',
+          sourceSection: sourceMatch?.[1] || '',
+          description: evidenceCoreDescription(data.description)
         }));
       });
 
       const batch = writeBatch(db);
       let savedCount = 0;
       let skippedCount = 0;
+      const groupNumbers = new Map<string, number>();
+      const itemNumbers = new Map<string, number>();
 
-      selectedDrafts.forEach((draft, index) => {
+      selectedDrafts.forEach((draft) => {
         const key = normalizeEvidenceKey(draft);
         if (existingKeys.has(key)) {
           skippedCount += 1;
@@ -454,13 +522,14 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
         existingKeys.add(key);
         const itemRef = doc(collection(db, evidenceCollectionPath));
         const skillTags = draft.inferredSkillTags?.length ? `\nSkill tags: ${draft.inferredSkillTags.join(', ')}` : '';
+        const sourceGroupNote = draft.sourceGroup ? `\nSource group: ${draft.sourceGroup}` : '';
         const sourceNote = draft.sourceSection ? `\nSource section: ${draft.sourceSection}` : '';
         const payload: CVEvidence = {
-          evidenceId: draftEvidenceId(index, runStamp),
+          evidenceId: buildDraftEvidenceId(draft, prefixMaxGroup, groupNumbers, itemNumbers),
           category: draft.category || 'Other Highlight',
           title: draft.title.trim(),
           organization: draft.organization.trim(),
-          description: `${draft.description.trim()}${skillTags}${sourceNote}`,
+          description: `${draft.description.trim()}${skillTags}${sourceGroupNote}${sourceNote}`,
           isVerified: false,
           createdAt: now,
           updatedAt: now
@@ -471,7 +540,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
 
       if (savedCount > 0) await batch.commit();
       setEvidenceDrafts((current) => current.map((draft) => ({ ...draft, selected: false })));
-      setWizardMessage(`${savedCount} evidence drafts saved as unverified review items.${skippedCount ? ` ${skippedCount} duplicate draft(s) skipped.` : ''}`);
+      setWizardMessage(`${savedCount} evidence claim drafts saved as unverified review items.${skippedCount ? ` ${skippedCount} duplicate draft(s) skipped.` : ''}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `profiles/${userId}/cv_evidences`);
     } finally {
@@ -516,7 +585,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
             <div>
               <h3 className="text-lg font-bold text-slate-900">Auto-build from existing CV</h3>
               <p className="mt-1 text-sm leading-relaxed text-slate-500">
-                Upload or link a CV, let Gemini extract only visible facts, then review the placeholder template and evidence drafts before saving.
+                Upload or link a CV, let Gemini extract only visible facts, then review the placeholder template and one-claim evidence items before saving.
               </p>
             </div>
           </div>
@@ -671,8 +740,8 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
               <div className="rounded-xl border border-slate-100 bg-white p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h4 className="text-sm font-bold text-slate-900">Evidence draft review</h4>
-                    <p className="mt-1 text-xs text-slate-500">Saved drafts stay unverified until the user manually confirms them later.</p>
+                    <h4 className="text-sm font-bold text-slate-900">Evidence claim review</h4>
+                    <p className="mt-1 text-xs text-slate-500">Saved claims stay unverified until the user manually confirms them later.</p>
                   </div>
                   <button
                     type="button"
@@ -681,7 +750,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
                     className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-400"
                   >
                     {wizardStatus === 'savingEvidence' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    <span>{wizardStatus === 'savingEvidence' ? 'Saving...' : 'Save selected drafts'}</span>
+                    <span>{wizardStatus === 'savingEvidence' ? 'Saving...' : 'Save selected claims'}</span>
                   </button>
                 </div>
 
@@ -696,7 +765,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
                             onChange={(event) => updateEvidenceDraft(index, { selected: event.target.checked })}
                             className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                           />
-                          Review draft {index + 1}
+                          Evidence claim {index + 1}
                         </label>
                         <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
                           Confidence {Math.round(Number(draft.confidence || 0) * 100)}%
@@ -716,7 +785,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
                         <input
                           value={draft.title}
                           onChange={(event) => updateEvidenceDraft(index, { title: event.target.value })}
-                          placeholder="Evidence title"
+                          placeholder="Claim title"
                           className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-emerald-500/50 md:col-span-2"
                         />
                       </div>
@@ -733,7 +802,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
                         className="mt-3 w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-emerald-500/50"
                       />
                       <div className="mt-2 text-[11px] text-slate-400">
-                        Source: {draft.sourceSection || 'CV text'}{draft.inferredSkillTags?.length ? ` | Tags: ${draft.inferredSkillTags.join(', ')}` : ''}
+                        Source: {draft.sourceGroup || draft.sourceSection || 'CV text'}{draft.inferredSkillTags?.length ? ` | Tags: ${draft.inferredSkillTags.join(', ')}` : ''}
                       </div>
                     </div>
                   ))}

@@ -75,7 +75,7 @@ export default function AuthScreen({ onLoginSuccess, loading, setLoading }: Auth
           <div className="space-y-4 text-left mb-8 max-w-xs mx-auto">
             <div className="flex items-start space-x-3 text-slate-600">
               <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
-              <div className="text-sm font-medium">CV Evidence Fact-Bank</div>
+              <div className="text-sm font-medium">CV Evidence Bank</div>
             </div>
             <div className="flex items-start space-x-3 text-slate-600">
               <Radar className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
