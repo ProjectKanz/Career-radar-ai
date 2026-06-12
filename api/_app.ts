@@ -1822,11 +1822,19 @@ ${text}
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
-        responseMimeType: 'application/json'
+        responseMimeType: 'application/json',
+        responseSchema: onboardingSchema()
       }
     });
 
-    const parsedData = normalizeOnboardingResult(JSON.parse(response.text || '{}'));
+    const parsedData = normalizeOnboardingResult(JSON.parse(response.text || '{}')) as Record<string, any>;
+    const templateFieldCount = Object.values(parsedData.templateFields || {})
+      .filter((value) => String(value || '').trim())
+      .length;
+    const evidenceDraftCount = Array.isArray(parsedData.evidenceDrafts) ? parsedData.evidenceDrafts.length : 0;
+    if (templateFieldCount === 0 && evidenceDraftCount === 0) {
+      throw new Error('Gemini returned an empty CV onboarding mapping. Please retry Generate mapping, or use DOCX/PDF source if the Google Docs text extraction looks unusual.');
+    }
     const outputCharacterCount = response.text?.length || JSON.stringify(parsedData).length;
     recordAiUsage({
       featureName: 'Generate CV Onboarding',

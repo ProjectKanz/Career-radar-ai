@@ -415,6 +415,11 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
       const data = await readApiJson(response, 'Gemini could not build CV onboarding claims.');
 
       const result = data as OnboardingResult;
+      const templateFieldCount = Object.values(result.templateFields || {}).filter((value) => String(value || '').trim()).length;
+      const evidenceDraftCount = Array.isArray(result.evidenceDrafts) ? result.evidenceDrafts.length : 0;
+      if (templateFieldCount === 0 && evidenceDraftCount === 0) {
+        throw new Error('Generated mapping was empty. Retry Generate mapping, or re-parse the CV source before trying again.');
+      }
       setOnboardingResult(result);
       setEvidenceDrafts((result.evidenceDrafts || []).map((draft) => ({
         ...draft,
