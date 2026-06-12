@@ -200,6 +200,14 @@ function extractUrls(value: string | undefined) {
   return String(value || '').match(/https?:\/\/[^\s)]+/g) || [];
 }
 
+function fieldKeyToPlaceholder(key: string) {
+  return `{{${key
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .replace(/([a-zA-Z])(\d)/g, '$1_$2')
+    .replace(/(\d)([A-Z])/g, '$1_$2')
+    .toUpperCase()}}}`;
+}
+
 function buildContactLine(profile: Profile) {
   const raw = String(profile.portfolioWording || '').trim();
   const urls = extractUrls(profile.portfolioWording).slice(0, 3);
@@ -491,7 +499,7 @@ function replacementMap(fields: CVTemplateFields, profile?: Profile) {
   };
 
   Object.entries(safeFields).forEach(([key, value]) => {
-    const placeholder = `{{${key.replace(/([a-z])([A-Z])/g, '$1_$2').replace(/([a-zA-Z])(\d)/g, '$1_$2').toUpperCase()}}}`;
+    const placeholder = fieldKeyToPlaceholder(key);
     replacements[placeholder] = value;
   });
 

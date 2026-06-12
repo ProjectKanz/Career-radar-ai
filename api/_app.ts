@@ -1870,16 +1870,49 @@ ${text}
 });
 
 function fieldKeyToPlaceholder(key: string) {
-  return `{{${key.replace(/([a-z])([A-Z])/g, '$1_$2').replace(/([a-zA-Z])(\d)/g, '$1_$2').toUpperCase()}}}`;
+  return `{{${key
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .replace(/([a-zA-Z])(\d)/g, '$1_$2')
+    .replace(/(\d)([A-Z])/g, '$1_$2')
+    .toUpperCase()}}}`;
+}
+
+function isPlaceholderCandidateValue(value: string) {
+  const cleaned = String(value || '').trim();
+  return Boolean(cleaned && cleaned !== '[Needs verified input]' && cleaned.length >= 8);
+}
+
+function isBulletPlaceholderKey(key: string) {
+  return /(bullet|achievement|responsibilit)/i.test(key);
+}
+
+function isSkillPlaceholderKey(key: string) {
+  return /^(hardSkills|softSkills|skillsSection)$/i.test(key);
+}
+
+function isSafeProfessionalSummaryCandidate(value: string) {
+  const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!isPlaceholderCandidateValue(cleaned)) return false;
+  if (wordCount(cleaned) < 35) return false;
+  if (!/[.!?]$/.test(cleaned)) return false;
+  return true;
+}
+
+function isTailorablePlaceholderField(key: string, value: string) {
+  if (!isPlaceholderCandidateValue(value)) return false;
+  if (key === 'professionalSummary') return isSafeProfessionalSummaryCandidate(value);
+  if (isSkillPlaceholderKey(key)) return true;
+  if (isBulletPlaceholderKey(key)) return true;
+  return false;
 }
 
 function sourceValuePlaceholderPairs(templateFields: Record<string, string>) {
   const pairs: [string, string][] = Object.entries(templateFields || {})
+    .filter(([key, value]) => isTailorablePlaceholderField(key, String(value || '')))
     .map(([key, value]) => [String(value || ''), fieldKeyToPlaceholder(key)] as [string, string]);
   const seen = new Set<string>();
   return pairs
     .map(([value, placeholder]) => [String(value || '').trim(), placeholder] as [string, string])
-    .filter(([value]) => value && value !== '[Needs verified input]' && value.length >= 8)
     .sort((a, b) => b[0].length - a[0].length)
     .filter(([value]) => {
       const key = value.toLowerCase();
@@ -2580,6 +2613,72 @@ function getEvidenceBulletText(evidence: CvEvidenceInput, checklists: ChecklistI
   return evidence.description || '';
 }
 
+function isUsableSkillValue(value: unknown, warning: string) {
+  const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned || cleaned === warning) return false;
+  if (/^\[needs verified input\]$/i.test(cleaned)) return false;
+
+  const parts = cleaned
+    .split(/[|,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => !/^\[needs verified input\]$/i.test(item));
+
+  if (parts.length >= 2) return true;
+  if (cleaned.length < 10) return false;
+  if (/^(communication|leadership|teamwork|management|collaboration)$/i.test(cleaned)) return false;
+  return true;
+}
+
+function skillSignalsFromEvidence(evidences: CvEvidenceInput[], kind: 'hard' | 'soft') {
+  const sourceText = lowerText(...evidences.map((evidence) => [
+    evidence.category,
+    evidence.title,
+    evidence.organization,
+    evidence.description
+  ].join(' ')));
+
+  const hardRules = [
+    { label: 'Social Media Management', keywords: ['social media', 'media sosial'] },
+    { label: 'Content Planning', keywords: ['content plan', 'perencanaan konten', 'editorial calendar'] },
+    { label: 'Copywriting', keywords: ['copywriting'] },
+    { label: 'Digital Marketing', keywords: ['digital marketing', 'strategi digital'] },
+    { label: 'E-Commerce Management', keywords: ['e-commerce', 'shopee'] },
+    { label: 'Social Media Analytics', keywords: ['analytics', 'analisis media', 'performance analysis'] },
+    { label: 'Campaign Planning', keywords: ['campaign', 'kampanye'] },
+    { label: 'Brand Communication', keywords: ['brand communication', 'komunikasi brand', 'branding'] },
+    { label: 'Market & Audience Analysis', keywords: ['market', 'audience', 'audiens'] },
+    { label: 'Financial Reporting', keywords: ['laporan keuangan', 'financial reporting'] }
+  ];
+  const softRules = [
+    { label: 'Strategic Communication', keywords: ['komunikasi strategis', 'strategic communication'] },
+    { label: 'Public Speaking', keywords: ['public speaking', 'announcer', 'moderasi', 'membawakan'] },
+    { label: 'Creative Thinking', keywords: ['creative', 'kreatif'] },
+    { label: 'Problem Solving', keywords: ['problem solving', 'solve'] },
+    { label: 'Leadership', keywords: ['leadership', 'memimpin'] },
+    { label: 'Negotiation', keywords: ['negosiasi', 'negotiation'] },
+    { label: 'Relationship Management', keywords: ['relationship', 'relasi', 'mitra'] },
+    { label: 'Time Management', keywords: ['tepat waktu', 'time management'] },
+    { label: 'Team Collaboration', keywords: ['kolaborasi', 'collaboration', 'tim'] }
+  ];
+
+  return matchedLabels(sourceText, kind === 'hard' ? hardRules : softRules);
+}
+
+function bestSkillValue(
+  preferredValue: unknown,
+  roleSignals: string[],
+  evidences: CvEvidenceInput[],
+  warning: string,
+  kind: 'hard' | 'soft'
+) {
+  if (isUsableSkillValue(preferredValue, warning)) return String(preferredValue).trim();
+
+  const evidenceSignals = skillSignalsFromEvidence(evidences, kind);
+  const combined = unique([...evidenceSignals, ...roleSignals]).slice(0, 10);
+  return combined.length ? combined.join(' | ') : warning;
+}
+
 function buildFallbackSummary(
   profile: any,
   opportunity: any,
@@ -2955,8 +3054,8 @@ app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
       parsedData[`certificationBullet${i}`] = certificationBullets[i - 1] || '';
     }
 
-    const hardSkills = pack.hardSkills || preRoleDna.hardSkillSignals.join(' | ');
-    const softSkills = pack.softSkills || preRoleDna.softSkillSignals.join(' | ');
+    const hardSkills = bestSkillValue(pack.hardSkills, preRoleDna.hardSkillSignals, verified, warning, 'hard');
+    const softSkills = bestSkillValue(pack.softSkills, preRoleDna.softSkillSignals, verified, warning, 'soft');
     parsedData.hardSkills = hardSkills;
     parsedData.softSkills = softSkills;
 
