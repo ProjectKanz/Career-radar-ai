@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import zlib from 'zlib';
 import { GoogleGenAI, Type } from '@google/genai';
 import rateLimit from 'express-rate-limit';
+import { validateCvTemplateFields, CVTemplateFields } from '../src/utils/cvDrive';
 
 // Lazy-initialize the server Gemini client only when public fallback is explicitly enabled.
 let serverAiClient: GoogleGenAI | null = null;
@@ -57,7 +58,7 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const MAX_AI_CALLS_PER_JOB_WORKFLOW = Number(process.env.MAX_AI_CALLS_PER_JOB_WORKFLOW || 2);
 const MAX_INPUT_CHARS_PER_CALL = Number(process.env.MAX_INPUT_CHARS_PER_CALL || 45000);
 const MAX_EVIDENCE_ITEMS_PER_CALL = Number(process.env.MAX_EVIDENCE_ITEMS_PER_CALL || 18);
-const MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL = Number(process.env.MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL || Math.min(MAX_EVIDENCE_ITEMS_PER_CALL, 12));
+const MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL = Number(process.env.MAX_ANALYZE_EVIDENCE_ITEMS_PER_CALL || Math.min(MAX_EVIDENCE_ITEMS_PER_CALL, 8));
 const DAILY_AI_CALL_LIMIT_DEV = Number(process.env.DAILY_AI_CALL_LIMIT_DEV || 20);
 const REQUIRE_CONFIRM_FOR_REGENERATE = String(process.env.REQUIRE_CONFIRM_FOR_REGENERATE || 'true') === 'true';
 const MAX_JOB_TEXT_CHARS = Number(process.env.MAX_JOB_TEXT_CHARS || 12000);
@@ -622,35 +623,18 @@ function capJobText(jobText: unknown, maxChars = MAX_JOB_TEXT_CHARS) {
 
 function compactCvTailoringFrameworkForPrompt(framework: CvTailoringFramework, mode: 'standard' | 'compact') {
   const mappingLimit = mode === 'compact' ? 8 : 14;
-  const promotionLimit = mode === 'compact' ? 6 : 10;
-  const checklistLimit = mode === 'compact' ? 5 : 10;
   return {
-    roleDna: framework.roleDna,
+    roleDna: {
+      direction: framework.roleDna.primaryDirection,
+      level: framework.roleDna.seniorityLevel,
+      risks: framework.roleDna.avoidOverclaimRisks
+    },
     cvBaseVersion: framework.cvBaseVersion,
-    evidenceIdsUsed: framework.evidenceIdsUsed,
     evidenceMappings: framework.evidenceMappings.slice(0, mappingLimit).map((item) => ({
       evidenceId: item.evidenceId,
-      targetCvSection: item.targetCvSection,
-      businessMeaning: String(item.businessMeaning || '').slice(0, 220)
+      targetCvSection: item.targetCvSection
     })),
-    qualificationPromotions: framework.qualificationPromotions.slice(0, promotionLimit).map((item) => ({
-      cvSection: item.cvSection,
-      evidenceId: item.evidenceId,
-      priority: item.priority,
-      finalSuggestedText: String(item.finalSuggestedText || '').slice(0, 260)
-    })),
-    certificationPriority: framework.certificationPriority,
-    certificationEvidenceSelected: framework.certificationEvidenceSelected,
-    finalSelectedCertificationList: framework.finalSelectedCertificationList,
-    finalCertificationStringLength: framework.finalCertificationStringLength,
-    onePageCompressionMode: framework.onePageCompressionMode,
-    summarySource: framework.summarySource,
-    selectedSummary: String(framework.selectedSummary || '').slice(0, 700),
-    verifiedEvidenceCount: framework.verifiedEvidenceCount,
-    ignoredUnverifiedEvidenceIds: framework.ignoredUnverifiedEvidenceIds,
-    readyChecklistRowsUsed: framework.readyChecklistRowsUsed.slice(0, checklistLimit),
-    englishEvidenceWarning: framework.englishEvidenceWarning,
-    qualityWarnings: framework.qualityWarnings
+    certificationPriority: framework.certificationPriority
   };
 }
 
@@ -1066,7 +1050,7 @@ function planCertificationEvidence(
 
   const accepted = Array.from(acceptedByKey.values())
     .sort((a, b) => (a.priority || 99) - (b.priority || 99))
-    .slice(0, 4);
+    .slice(0, 8);
   const longList = accepted.map((item) => item.finalText || '').filter(Boolean);
   const longString = longList.join(' | ');
   const compressionMode = longString.length > 210 || wordCount(longString) > 30;
@@ -1168,6 +1152,12 @@ function buildCvTailoringFramework(input: {
 
 const cvFieldLimits: Record<string, number> = {
   professionalSummary: 85,
+  workExperienceSection: 220,
+  organizationalExperienceSection: 160,
+  projectSection: 160,
+  certificationSection: 70,
+  achievementSection: 80,
+  skillsSection: 70,
   experience1Title: 12,
   experience1Organization: 12,
   experience1Date: 10,
@@ -1186,7 +1176,7 @@ const cvFieldLimits: Record<string, number> = {
   project2Bullet1: 32,
   project3Title: 12,
   project3Bullet1: 32,
-  certifications: 60,
+  certifications: 80,
   achievementBullet1: 22,
   achievementBullet2: 22,
   achievementBullet3: 22,
@@ -1194,6 +1184,47 @@ const cvFieldLimits: Record<string, number> = {
   softSkills: 30,
   languages: 18
 };
+
+function usableCvValue(value: unknown, warning: string) {
+  const cleaned = String(value || '').trim();
+  return cleaned && cleaned !== warning;
+}
+
+function sectionLinesFromNumberedFields(
+  fields: Record<string, string>,
+  prefix: string,
+  slotCount: number,
+  bulletCount: number,
+  warning: string
+) {
+  const lines: string[] = [];
+  for (let slot = 1; slot <= slotCount; slot += 1) {
+    const title = fields[`${prefix}${slot}Title`];
+    const organization = fields[`${prefix}${slot}Organization`];
+    const date = fields[`${prefix}${slot}Date`];
+    const heading = [title, organization, date].filter((item) => usableCvValue(item, warning)).join(' | ');
+    const bullets: string[] = [];
+    for (let bulletIndex = 1; bulletIndex <= bulletCount; bulletIndex += 1) {
+      const bullet = fields[`${prefix}${slot}Bullet${bulletIndex}`];
+      if (usableCvValue(bullet, warning)) bullets.push(`- ${bullet}`);
+    }
+    if (heading || bullets.length > 0) {
+      if (heading) lines.push(heading);
+      lines.push(...bullets);
+      lines.push('');
+    }
+  }
+  return lines.join('\n').trim();
+}
+
+function sectionLinesFromBullets(fields: Record<string, string>, prefix: string, count: number, warning: string) {
+  const lines: string[] = [];
+  for (let index = 1; index <= count; index += 1) {
+    const value = fields[`${prefix}${index}`];
+    if (usableCvValue(value, warning)) lines.push(`- ${value}`);
+  }
+  return lines.join('\n').trim();
+}
 
 function estimateOnePageRisk(fields: Record<string, string>) {
   const totalWords = Object.values(fields).reduce((sum, value) => sum + wordCount(value), 0);
@@ -1240,11 +1271,34 @@ function normalizeGeneratedCvFields(
     .join(' | ');
   normalized.certifications = dynamicCertifications || normalized.certifications || warning;
 
-  certificationBullets.slice(0, 4).forEach((item, index) => {
+  certificationBullets.slice(0, 8).forEach((item, index) => {
     if (item) {
       normalized[`certificationBullet${index + 1}`] = softenRiskyLanguage(item);
     }
   });
+
+  normalized.workExperienceSection = usableCvValue(normalized.workExperienceSection, warning)
+    ? normalized.workExperienceSection
+    : sectionLinesFromNumberedFields(normalized, 'experience', 4, 5, warning) || warning;
+  normalized.organizationalExperienceSection = usableCvValue(normalized.organizationalExperienceSection, warning)
+    ? normalized.organizationalExperienceSection
+    : sectionLinesFromNumberedFields(normalized, 'organization', 3, 5, warning) || warning;
+  normalized.projectSection = usableCvValue(normalized.projectSection, warning)
+    ? normalized.projectSection
+    : sectionLinesFromNumberedFields(normalized, 'project', 4, 5, warning) || warning;
+  normalized.certificationSection = usableCvValue(normalized.certificationSection, warning)
+    ? normalized.certificationSection
+    : (certificationBullets.length ? certificationBullets.map((item) => `- ${softenRiskyLanguage(item)}`).join('\n') : sectionLinesFromBullets(normalized, 'certificationBullet', 8, warning)) || warning;
+  normalized.achievementSection = usableCvValue(normalized.achievementSection, warning)
+    ? normalized.achievementSection
+    : sectionLinesFromBullets(normalized, 'achievementBullet', 5, warning) || warning;
+  normalized.skillsSection = usableCvValue(normalized.skillsSection, warning)
+    ? normalized.skillsSection
+    : [
+      usableCvValue(normalized.hardSkills, warning) ? `Hard Skills: ${normalized.hardSkills}` : '',
+      usableCvValue(normalized.softSkills, warning) ? `Soft Skills: ${normalized.softSkills}` : '',
+      usableCvValue(normalized.languages, warning) ? `Languages: ${normalized.languages}` : ''
+    ].filter(Boolean).join('\n') || warning;
 
   return normalized;
 }
@@ -1407,6 +1461,7 @@ function extractGoogleDocText(document: Record<string, unknown>) {
 const ONBOARDING_CATEGORIES = [
   'Work Achievement',
   'Academic Honor',
+  'Organizational Experience',
   'Side Project / Portfolio',
   'Certification',
   'Hard Skill / Technical Fact',
@@ -1417,7 +1472,8 @@ function normalizeEvidenceCategory(value: unknown) {
   const raw = String(value || '').toLowerCase();
   if (/cert|toefl|license|licence|course|training/.test(raw)) return 'Certification';
   if (/academic|award|honou?r|competition|finalist|winner|place|rank/.test(raw)) return 'Academic Honor';
-  if (/project|portfolio|volunteer|organization|organisational|organizational|community/.test(raw)) return 'Side Project / Portfolio';
+  if (/organization|organisational|organizational|committee|club|student leadership|bem|senat|himpunan|osis|panitia|campus leadership/.test(raw)) return 'Organizational Experience';
+  if (/project|portfolio|volunteer|community/.test(raw)) return 'Side Project / Portfolio';
   if (/skill|technical|tool|software|language/.test(raw)) return 'Hard Skill / Technical Fact';
   if (/work|intern|job|employee|business|sales|operation/.test(raw)) return 'Work Achievement';
   return ONBOARDING_CATEGORIES.includes(String(value || '')) ? String(value) : 'Other Highlight';
@@ -1426,9 +1482,11 @@ function normalizeEvidenceCategory(value: unknown) {
 function evidenceDraftKey(value: Record<string, unknown>) {
   return [
     normalizeEvidenceCategory(value.category),
+    value.sourceGroup,
     value.title,
     value.organization,
-    value.sourceSection
+    value.sourceSection,
+    value.description
   ].map((item) => String(item || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).join('|');
 }
 
@@ -1443,11 +1501,12 @@ function normalizeOnboardingResult(value: Record<string, unknown>) {
         return {
           ...item,
           category: normalizeEvidenceCategory(item.category),
-          title: String(item.title || '').trim(),
-          organization: String(item.organization || '').trim(),
-          description: String(item.description || '').trim(),
-          sourceSection: String(item.sourceSection || '').trim(),
-          confidence: Number(item.confidence || 0),
+      title: String(item.title || '').trim(),
+      organization: String(item.organization || '').trim(),
+      description: String(item.description || '').trim(),
+      sourceGroup: String(item.sourceGroup || '').trim(),
+      sourceSection: String(item.sourceSection || '').trim(),
+      confidence: Number(item.confidence || 0),
           inferredSkillTags: Array.isArray(item.inferredSkillTags)
             ? item.inferredSkillTags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 8)
             : []
@@ -1489,40 +1548,29 @@ EDUCATION
 {{EDUCATION}}
 
 WORK EXPERIENCE
-{{EXPERIENCE_1_TITLE}} - {{EXPERIENCE_1_ORGANIZATION}}
-{{EXPERIENCE_1_DATE}}
-- {{EXPERIENCE_1_BULLET_1}}
-- {{EXPERIENCE_1_BULLET_2}}
-- {{EXPERIENCE_1_BULLET_3}}
+{{WORK_EXPERIENCE_SECTION}}
 
-{{EXPERIENCE_2_TITLE}} - {{EXPERIENCE_2_ORGANIZATION}}
-{{EXPERIENCE_2_DATE}}
-- {{EXPERIENCE_2_BULLET_1}}
-- {{EXPERIENCE_2_BULLET_2}}
-- {{EXPERIENCE_2_BULLET_3}}
+ORGANIZATIONAL EXPERIENCE
+{{ORGANIZATIONAL_EXPERIENCE_SECTION}}
 
-PROJECT / PORTFOLIO
-{{PROJECT_1_TITLE}}
-- {{PROJECT_1_BULLET_1}}
-
-{{PROJECT_2_TITLE}}
-- {{PROJECT_2_BULLET_1}}
-
-{{PROJECT_3_TITLE}}
-- {{PROJECT_3_BULLET_1}}
+PROJECT / PORTFOLIO / VOLUNTEERING
+{{PROJECT_SECTION}}
 
 CERTIFICATIONS
-{{CERTIFICATIONS}}
+{{CERTIFICATION_SECTION}}
 
 ACHIEVEMENTS
-- {{ACHIEVEMENT_BULLET_1}}
-- {{ACHIEVEMENT_BULLET_2}}
-- {{ACHIEVEMENT_BULLET_3}}
+{{ACHIEVEMENT_SECTION}}
 
 SKILLS & LANGUAGES
-Hard Skills: {{HARD_SKILLS}}
-Soft Skills: {{SOFT_SKILLS}}
-Languages: {{LANGUAGES}}
+{{SKILLS_SECTION}}
+
+NUMBERED PLACEHOLDERS FOR CUSTOM LAYOUTS
+Work: {{EXPERIENCE_1_TITLE}} | {{EXPERIENCE_1_ORGANIZATION}} | {{EXPERIENCE_1_DATE}} | {{EXPERIENCE_1_BULLET_1}} | {{EXPERIENCE_1_BULLET_2}} | {{EXPERIENCE_1_BULLET_3}} | {{EXPERIENCE_1_BULLET_4}} | {{EXPERIENCE_1_BULLET_5}}
+Organization: {{ORGANIZATION_1_TITLE}} | {{ORGANIZATION_1_ORGANIZATION}} | {{ORGANIZATION_1_DATE}} | {{ORGANIZATION_1_BULLET_1}} | {{ORGANIZATION_1_BULLET_2}} | {{ORGANIZATION_1_BULLET_3}} | {{ORGANIZATION_1_BULLET_4}} | {{ORGANIZATION_1_BULLET_5}}
+Project: {{PROJECT_1_TITLE}} | {{PROJECT_1_BULLET_1}} | {{PROJECT_1_BULLET_2}} | {{PROJECT_1_BULLET_3}} | {{PROJECT_1_BULLET_4}} | {{PROJECT_1_BULLET_5}}
+Certification bullets: {{CERTIFICATION_BULLET_1}} | {{CERTIFICATION_BULLET_2}} | {{CERTIFICATION_BULLET_3}} | {{CERTIFICATION_BULLET_4}} | {{CERTIFICATION_BULLET_5}} | {{CERTIFICATION_BULLET_6}} | {{CERTIFICATION_BULLET_7}} | {{CERTIFICATION_BULLET_8}}
+Achievement bullets: {{ACHIEVEMENT_BULLET_1}} | {{ACHIEVEMENT_BULLET_2}} | {{ACHIEVEMENT_BULLET_3}} | {{ACHIEVEMENT_BULLET_4}} | {{ACHIEVEMENT_BULLET_5}}
 
 Source: ${sourceName || 'CareerRadar CV onboarding'}`;
 }
@@ -1548,6 +1596,7 @@ function onboardingSchema() {
       title: { type: Type.STRING },
       organization: { type: Type.STRING },
       description: { type: Type.STRING },
+      sourceGroup: { type: Type.STRING },
       sourceSection: { type: Type.STRING },
       confidence: { type: Type.NUMBER },
       inferredSkillTags: {
@@ -1555,8 +1604,54 @@ function onboardingSchema() {
         items: { type: Type.STRING }
       }
     },
-    required: ['category', 'title', 'organization', 'description', 'sourceSection', 'confidence', 'inferredSkillTags']
+    required: ['category', 'title', 'organization', 'description', 'sourceGroup', 'sourceSection', 'confidence', 'inferredSkillTags']
   };
+  const stringField = { type: Type.STRING } as const;
+  const templateFieldProperties: Record<string, { type: Type.STRING }> = {
+    fullName: stringField,
+    contactLine: stringField,
+    targetTitle: stringField,
+    professionalSummary: stringField,
+    education: stringField,
+    workExperienceSection: stringField,
+    organizationalExperienceSection: stringField,
+    projectSection: stringField,
+    certificationSection: stringField,
+    achievementSection: stringField,
+    skillsSection: stringField,
+    certifications: stringField,
+    hardSkills: stringField,
+    softSkills: stringField,
+    languages: stringField
+  };
+  for (let slot = 1; slot <= 4; slot += 1) {
+    templateFieldProperties[`experience${slot}Title`] = stringField;
+    templateFieldProperties[`experience${slot}Organization`] = stringField;
+    templateFieldProperties[`experience${slot}Date`] = stringField;
+    for (let bullet = 1; bullet <= 5; bullet += 1) {
+      templateFieldProperties[`experience${slot}Bullet${bullet}`] = stringField;
+    }
+  }
+  for (let slot = 1; slot <= 3; slot += 1) {
+    templateFieldProperties[`organization${slot}Title`] = stringField;
+    templateFieldProperties[`organization${slot}Organization`] = stringField;
+    templateFieldProperties[`organization${slot}Date`] = stringField;
+    for (let bullet = 1; bullet <= 5; bullet += 1) {
+      templateFieldProperties[`organization${slot}Bullet${bullet}`] = stringField;
+    }
+  }
+  for (let slot = 1; slot <= 4; slot += 1) {
+    templateFieldProperties[`project${slot}Title`] = stringField;
+    for (let bullet = 1; bullet <= 5; bullet += 1) {
+      templateFieldProperties[`project${slot}Bullet${bullet}`] = stringField;
+    }
+  }
+  for (let bullet = 1; bullet <= 8; bullet += 1) {
+    templateFieldProperties[`certificationBullet${bullet}`] = stringField;
+  }
+  for (let bullet = 1; bullet <= 5; bullet += 1) {
+    templateFieldProperties[`achievementBullet${bullet}`] = stringField;
+  }
 
   return {
     type: Type.OBJECT,
@@ -1576,39 +1671,8 @@ function onboardingSchema() {
       },
       templateFields: {
         type: Type.OBJECT,
-        properties: {
-          fullName: { type: Type.STRING },
-          contactLine: { type: Type.STRING },
-          targetTitle: { type: Type.STRING },
-          professionalSummary: { type: Type.STRING },
-          education: { type: Type.STRING },
-          experience1Title: { type: Type.STRING },
-          experience1Organization: { type: Type.STRING },
-          experience1Date: { type: Type.STRING },
-          experience1Bullet1: { type: Type.STRING },
-          experience1Bullet2: { type: Type.STRING },
-          experience1Bullet3: { type: Type.STRING },
-          experience2Title: { type: Type.STRING },
-          experience2Organization: { type: Type.STRING },
-          experience2Date: { type: Type.STRING },
-          experience2Bullet1: { type: Type.STRING },
-          experience2Bullet2: { type: Type.STRING },
-          experience2Bullet3: { type: Type.STRING },
-          project1Title: { type: Type.STRING },
-          project1Bullet1: { type: Type.STRING },
-          project2Title: { type: Type.STRING },
-          project2Bullet1: { type: Type.STRING },
-          project3Title: { type: Type.STRING },
-          project3Bullet1: { type: Type.STRING },
-          certifications: { type: Type.STRING },
-          achievementBullet1: { type: Type.STRING },
-          achievementBullet2: { type: Type.STRING },
-          achievementBullet3: { type: Type.STRING },
-          hardSkills: { type: Type.STRING },
-          softSkills: { type: Type.STRING },
-          languages: { type: Type.STRING }
-        },
-        required: ['fullName', 'contactLine', 'targetTitle', 'professionalSummary', 'education', 'experience1Title', 'experience1Organization', 'experience1Date', 'experience1Bullet1', 'experience1Bullet2', 'experience1Bullet3', 'experience2Title', 'experience2Organization', 'experience2Date', 'experience2Bullet1', 'experience2Bullet2', 'experience2Bullet3', 'project1Title', 'project1Bullet1', 'project2Title', 'project2Bullet1', 'project3Title', 'project3Bullet1', 'certifications', 'achievementBullet1', 'achievementBullet2', 'achievementBullet3', 'hardSkills', 'softSkills', 'languages']
+        properties: templateFieldProperties,
+        required: ['fullName', 'contactLine', 'targetTitle', 'professionalSummary', 'education', 'workExperienceSection', 'organizationalExperienceSection', 'projectSection', 'certificationSection', 'achievementSection', 'skillsSection', 'hardSkills', 'softSkills', 'languages']
       },
       evidenceDrafts: {
         type: Type.ARRAY,
@@ -1725,19 +1789,29 @@ Task:
 - If a value is missing or unclear, return "[Needs verified input]".
 - Evidence drafts must be based only on text present in the CV.
 - Evidence drafts are not verified. Use conservative wording and confidence 0-1.
-- Evidence draft category must be one of: Work Achievement, Academic Honor, Side Project / Portfolio, Certification, Hard Skill / Technical Fact, Other Highlight.
+- Evidence draft category must be one of: Work Achievement, Academic Honor, Organizational Experience, Side Project / Portfolio, Certification, Hard Skill / Technical Fact, Other Highlight.
+- Each evidence draft must represent exactly one CV claim or one CV bullet.
+- Do not combine multiple bullets, responsibilities, metrics, tools, awards, certificates, or outcomes in one evidence draft.
+- If one role has three useful bullets, return three evidence drafts with the same organization but different claim titles and descriptions.
+- For sourceGroup, use the source CV item that groups related claims, such as "Rima Synergy Global - Social Media Specialist" or "Meraciklatte - Marketing Officer". Keep the same sourceGroup for multiple bullets from the same role/project/certificate.
+- For sourceSection, use the broader CV section name, such as "Work Experience", "Education", "Organization", or "Skills".
+- Do not create evidence drafts only for job title, organization, or date unless that field itself is a verifiable qualification.
+- Use general claim titles that a non-technical user can understand, such as "Monthly content production" or "E-commerce campaign monitoring".
 - Do not infer business impact. If the CV says "closed IDR 12 million in deals", do not add "contributed to revenue growth" unless that exact causal claim appears.
 - Prefer wording that stays close to the original CV text, with light cleanup only.
-- Avoid creating two evidence drafts for the same fact, certificate, award, role, or project.
+- Avoid creating two evidence drafts for the same exact fact, certificate, award, or bullet. Multiple different bullets from the same role are allowed and expected.
 
 Source name: ${sourceName || 'Uploaded CV'}
 
 Generic placeholder rules:
-- Use experience1/experience2 for strongest work or internship items.
-- Use project1/project2/project3 for strongest project or portfolio items.
+- Use experience1 through experience4 for formal work or internship items when the source CV has them.
+- Use organization1 through organization3 for student organizations, committees, clubs, campus leadership, and non-employment leadership.
+- Use project1/project2/project3/project4 for strongest project, portfolio, volunteering, community, or event items.
+- Also return dynamic plain-text sections when enough evidence exists: workExperienceSection, organizationalExperienceSection, projectSection, certificationSection, achievementSection, and skillsSection.
 - Keep bullets one sentence and concise.
 - Certifications must contain only real certificates, courses, licenses, or language scores.
 - Achievements contain awards, competitions, and measurable extracurricular outcomes.
+- If the original CV has bullet-list certifications, split them into certificationBullet1 through certificationBullet8 and certificationSection. Do not collapse distinct credentials into one certification bullet.
 
 CV text:
 ${text}
@@ -1749,8 +1823,7 @@ ${text}
       model: GEMINI_MODEL,
       contents: prompt,
       config: {
-        responseMimeType: 'application/json',
-        responseSchema: onboardingSchema()
+        responseMimeType: 'application/json'
       }
     });
 
@@ -1789,37 +1862,13 @@ ${text}
   }
 });
 
+function fieldKeyToPlaceholder(key: string) {
+  return `{{${key.replace(/([a-z])([A-Z])/g, '$1_$2').replace(/([a-zA-Z])(\d)/g, '$1_$2').toUpperCase()}}}`;
+}
+
 function sourceValuePlaceholderPairs(templateFields: Record<string, string>) {
-  const pairs: [string, string][] = [
-    [templateFields.targetTitle, '{{TARGET_TITLE}}'],
-    [templateFields.professionalSummary, '{{PROFESSIONAL_SUMMARY}}'],
-    [templateFields.education, '{{EDUCATION}}'],
-    [templateFields.experience1Title, '{{EXPERIENCE_1_TITLE}}'],
-    [templateFields.experience1Organization, '{{EXPERIENCE_1_ORGANIZATION}}'],
-    [templateFields.experience1Date, '{{EXPERIENCE_1_DATE}}'],
-    [templateFields.experience1Bullet1, '{{EXPERIENCE_1_BULLET_1}}'],
-    [templateFields.experience1Bullet2, '{{EXPERIENCE_1_BULLET_2}}'],
-    [templateFields.experience1Bullet3, '{{EXPERIENCE_1_BULLET_3}}'],
-    [templateFields.experience2Title, '{{EXPERIENCE_2_TITLE}}'],
-    [templateFields.experience2Organization, '{{EXPERIENCE_2_ORGANIZATION}}'],
-    [templateFields.experience2Date, '{{EXPERIENCE_2_DATE}}'],
-    [templateFields.experience2Bullet1, '{{EXPERIENCE_2_BULLET_1}}'],
-    [templateFields.experience2Bullet2, '{{EXPERIENCE_2_BULLET_2}}'],
-    [templateFields.experience2Bullet3, '{{EXPERIENCE_2_BULLET_3}}'],
-    [templateFields.project1Title, '{{PROJECT_1_TITLE}}'],
-    [templateFields.project1Bullet1, '{{PROJECT_1_BULLET_1}}'],
-    [templateFields.project2Title, '{{PROJECT_2_TITLE}}'],
-    [templateFields.project2Bullet1, '{{PROJECT_2_BULLET_1}}'],
-    [templateFields.project3Title, '{{PROJECT_3_TITLE}}'],
-    [templateFields.project3Bullet1, '{{PROJECT_3_BULLET_1}}'],
-    [templateFields.certifications, '{{CERTIFICATIONS}}'],
-    [templateFields.achievementBullet1, '{{ACHIEVEMENT_BULLET_1}}'],
-    [templateFields.achievementBullet2, '{{ACHIEVEMENT_BULLET_2}}'],
-    [templateFields.achievementBullet3, '{{ACHIEVEMENT_BULLET_3}}'],
-    [templateFields.hardSkills, '{{HARD_SKILLS}}'],
-    [templateFields.softSkills, '{{SOFT_SKILLS}}'],
-    [templateFields.languages, '{{LANGUAGES}}']
-  ];
+  const pairs: [string, string][] = Object.entries(templateFields || {})
+    .map(([key, value]) => [String(value || ''), fieldKeyToPlaceholder(key)] as [string, string]);
   const seen = new Set<string>();
   return pairs
     .map(([value, placeholder]) => [String(value || '').trim(), placeholder] as [string, string])
@@ -1950,7 +1999,8 @@ Rules:
 
 File name: ${String(fileName || 'job-screenshot').slice(0, 120)}`;
 
-    inputCharacterCount = prompt.length + normalizedBase64.length;
+    // Replace base64 string character count with static charge of 258 tokens (equivalent to 1032 characters)
+    inputCharacterCount = prompt.length + 1032;
     assertCostGuard(prompt.length, { allowInputOverride: true });
     const ai = getGenAIClient(requestGeminiApiKey);
     const response = await ai.models.generateContent({
@@ -2063,9 +2113,9 @@ function buildAnalyzeJobPrompt(jobText: unknown, profile: unknown, evidences: un
     'compact'
   );
 
-  const profileJson = JSON.stringify(compactRequestContext.profile, null, 2);
-  const evidenceJson = JSON.stringify(promptEvidences, null, 2);
-  const frameworkJson = JSON.stringify(cvTailoringFramework, null, 2);
+  const profileJson = JSON.stringify(compactRequestContext.profile);
+  const evidenceJson = JSON.stringify(promptEvidences);
+  const frameworkJson = JSON.stringify(cvTailoringFramework);
   const instructionTemplate = `You are a highly analytical AI talent matcher and strategic resume advisor. Your task is to perform an exhaustive, objective comparison between a candidate's portfolio/evidence bank (the ground truth facts) and a specific job description.
 
 Candidate Profile:
@@ -2277,7 +2327,7 @@ app.post('/api/analyze-job', analyzeLimiter, async (req, res) => {
                 properties: {
                   cvSection: { type: Type.STRING, description: 'Target section on resume (e.g. Work History, Projects, Skills).' },
                   editType: { type: Type.STRING, description: 'Type of change needed (e.g., Target metric, Insert tech keywords).' },
-                  sourceEvidence: { type: Type.STRING, description: 'How to map the existing candidate evidence (e.g. CSA-01 Project) into the rewrite.' },
+                  sourceEvidence: { type: Type.STRING, description: 'How to map the existing candidate evidence (e.g. WRK-001-001 work claim) into the rewrite.' },
                   finalSuggestedText: { type: Type.STRING, description: 'Complete high-quality tailored text block suggested for copy-pasting.' },
                   whyTheChangeMatters: { type: Type.STRING, description: 'Explanation of strategic advantage or why this keyword gets past ATS screens.' },
                   priority: { type: Type.STRING, enum: ['High', 'Medium', 'Low'], description: 'Urgency of item.' },
@@ -2384,6 +2434,184 @@ app.post('/api/analyze-job', analyzeLimiter, async (req, res) => {
   }
 });
 
+function classifyEvidenceSection(evidence: CvEvidenceInput): 'experience' | 'organization' | 'project' | 'certification' | 'achievement' {
+  const category = evidence.category || '';
+  const normalizedCategory = String(category).trim().toLowerCase();
+  const title = evidence.title || '';
+  const organization = evidence.organization || '';
+  const description = evidence.description || '';
+  const text = `${category} ${title} ${organization} ${description}`;
+
+  if (normalizedCategory === 'work achievement') {
+    return 'experience';
+  }
+  if (normalizedCategory === 'organizational experience') {
+    return 'organization';
+  }
+  if (normalizedCategory === 'side project / portfolio') {
+    return 'project';
+  }
+  if (normalizedCategory === 'academic honor') {
+    return 'achievement';
+  }
+  if (normalizedCategory === 'certification') {
+    return 'certification';
+  }
+
+  const certRegex = /cert|course|training|license|credential|toefl|ielts|toeic|proficiency/i;
+  const certExcludeRegex = /competition|achievement|award|winner|finalist|project|portfolio|work experience|internship|employment|job|case competition/i;
+
+  const achievementRegex = /achievement|competition|award|winner|finalist|champion|place|rank|pemenang|juara|lomba/i;
+
+  const experienceRegex = /intern|work|experience|employment|job|internship|asisten|assistant|freelance|analyst|developer|engineer|staff|contract|officer/i;
+  const experienceExcludeRegex = /himpunan|bem|senat|panitia|committee|club|student association|campus|university|school|osis/i;
+
+  const orgRegex = /organization|organisational|organizational|committee|club|student leadership|bem|senat|himpunan|osis|panitia|liaison|governance|volunteer/i;
+
+  if (certRegex.test(text) && !certExcludeRegex.test(text)) {
+    return 'certification';
+  }
+  if (achievementRegex.test(text)) {
+    return 'achievement';
+  }
+  if (experienceRegex.test(text) && !experienceExcludeRegex.test(text)) {
+    return 'experience';
+  }
+  if (orgRegex.test(text)) {
+    return 'organization';
+  }
+
+  // Fallbacks
+  return 'project';
+}
+
+function extractDateFromText(text: string): string {
+  if (!text) return '';
+  const monthNames = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+  const monthNum = '(?:0[1-9]|1[0-2])';
+  const month = `(?:${monthNames}|${monthNum})`;
+  const year = '(?:20\\d{2}|19\\d{2}|\\d{2})';
+  const monthYear = `(?:${month}\\s*[/.-]?\\s*${year})`;
+
+  // Month-year ranges, year ranges
+  const rangeRegex = new RegExp(`(${monthYear}|${year})\\s*(?:-|–|to|until|s/d|s\\.d\\.)\\s*(${monthYear}|${year}|[Pp]present|[Aa]ctive|[Cc]urrent)`, 'i');
+  const matchRange = text.match(rangeRegex);
+  if (matchRange) {
+    return matchRange[0].trim();
+  }
+
+  // Single month-year
+  const singleMonthYearRegex = new RegExp(monthYear, 'i');
+  const matchSingleMonthYear = text.match(singleMonthYearRegex);
+  if (matchSingleMonthYear) {
+    return matchSingleMonthYear[0].trim();
+  }
+
+  // Single year
+  const singleYearRegex = new RegExp(`\\b${year}\\b`);
+  const matchSingleYear = text.match(singleYearRegex);
+  if (matchSingleYear) {
+    return matchSingleYear[0].trim();
+  }
+
+  return '';
+}
+
+function extractDateFromEvidence(evidence: CvEvidenceInput): string {
+  let date = extractDateFromText(evidence.description || '');
+  if (date) return date;
+
+  date = extractDateFromText(evidence.title || '');
+  if (date) return date;
+
+  date = extractDateFromText(evidence.organization || '');
+  if (date) return date;
+
+  return '';
+}
+
+function splitIntoSentences(text: string): string[] {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+  const sentences: string[] = [];
+
+  for (const line of lines) {
+    let cleanedLine = line.trim();
+    if (!cleanedLine) continue;
+
+    // Ignore list bullet characters at start
+    cleanedLine = cleanedLine.replace(/^[-*•\u2022\d+[.)]\]\s]+/, '').trim();
+    if (!cleanedLine) continue;
+
+    // Split by sentence boundary punctuation [.!?]
+    const parts = cleanedLine.split(/[.!?]+(?:\s+|$)/);
+    for (const part of parts) {
+      const trimmedPart = part.trim();
+      if (trimmedPart) {
+        sentences.push(trimmedPart);
+      }
+    }
+  }
+
+  return sentences;
+}
+
+function getEvidenceBulletText(evidence: CvEvidenceInput, checklists: ChecklistInput[]): string {
+  const evId = evidence.evidenceId || evidence.id;
+  if (evId && Array.isArray(checklists)) {
+    const matched = checklists.find(
+      (item) =>
+        item.evidenceId === evId &&
+        item.isReadyToCopy !== false &&
+        item.isStale !== true &&
+        item.finalSuggestedText
+    );
+    if (matched) {
+      return matched.finalSuggestedText || '';
+    }
+  }
+  return evidence.description || '';
+}
+
+function buildFallbackSummary(
+  profile: any,
+  opportunity: any,
+  hardSkills: string,
+  verifiedEvidences: CvEvidenceInput[]
+): string {
+  const company = opportunity?.company || 'Target Company';
+  const role = opportunity?.role || 'Target Role';
+  const education = profile?.education || 'Relevant Fields';
+  const skillsText = hardSkills ? hardSkills.split('|').map(s => s.trim()).slice(0, 4).join(', ') : 'core domain areas';
+
+  const expCount = verifiedEvidences.filter(e => classifyEvidenceSection(e) === 'experience').length;
+  const projCount = verifiedEvidences.filter(e => classifyEvidenceSection(e) === 'project').length;
+
+  let proofPhrase = 'proven project execution';
+  if (expCount > 0 && projCount > 0) {
+    proofPhrase = `hands-on experience across ${expCount} professional roles and ${projCount} projects`;
+  } else if (expCount > 0) {
+    proofPhrase = `demonstrated professional capabilities across ${expCount} key work roles`;
+  } else if (projCount > 0) {
+    proofPhrase = `practical execution across ${projCount} portfolio projects`;
+  }
+
+  const summary = `A highly motivated and results-driven professional with a solid academic foundation in ${education}, offering capabilities in ${skillsText}. Supported by ${proofPhrase}, with a consistent focus on delivering structured outcomes and process optimization. Eager to contribute this background and drive growth for the teams at ${company} in the target role of ${role}.`;
+
+  const words = summary.split(/\s+/).filter(Boolean);
+  if (words.length >= 65 && words.length <= 85) {
+    return summary;
+  }
+
+  if (words.length < 65) {
+    const padding = `Committed to continuous professional development, cross-functional collaboration, and leveraging data-driven insights to solve complex challenges in fast-paced business environments.`;
+    const combined = `${summary} ${padding}`;
+    return limitWords(combined, 85);
+  }
+
+  return limitWords(summary, 85);
+}
+
 app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
   let inputCharacterCount = JSON.stringify(req.body || {}).length;
   let logCompany = '';
@@ -2400,8 +2628,7 @@ app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
       checklists,
       dryRun,
       useCachedOutput,
-      contextMode = 'standard',
-      overrideCostGuard
+      contextMode = 'standard'
     } = req.body;
     const resolvedContextMode: 'standard' | 'compact' = contextMode === 'compact' ? 'compact' : 'standard';
     logCompany = opportunity?.company || pack?.company || '';
@@ -2459,7 +2686,7 @@ app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
         role: logRole,
         opportunityId,
         endpointName: '/api/generate-cv-template',
-        model: GEMINI_MODEL,
+        model: 'local-cv-mapping',
         inputCharacterCount: 0,
         outputCharacterCount: JSON.stringify(cached).length,
         estimatedInputTokens: 0,
@@ -2474,269 +2701,277 @@ app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
       return;
     }
 
-    const prompt = `
-You are a strict ATS CV tailoring assistant. Return structured JSON only.
-
-The user has an original ATS CV template. Do NOT create a new CV layout. Fill only these fixed template fields:
-- targetTitle
-- professionalSummary
-- experience1Title
-- experience1Organization
-- experience1Date
-- experience1Bullet1
-- experience1Bullet2
-- experience1Bullet3
-- experience2Title
-- experience2Organization
-- experience2Date
-- experience2Bullet1
-- experience2Bullet2
-- experience2Bullet3
-- project1Title
-- project1Bullet1
-- project2Title
-- project2Bullet1
-- project3Title
-- project3Bullet1
-- certifications
-- certificationBullet1
-- certificationBullet2
-- certificationBullet3
-- certificationBullet4
-- achievementBullet1
-- achievementBullet2
-- achievementBullet3
-- hardSkills
-- softSkills
-- languages
-
-Fixed final CV layout:
-1. NAME + CONTACT
-2. TARGET TITLE
-3. PROFESSIONAL SUMMARY
-4. EDUCATION
-5. WORK EXPERIENCE
-   - Experience slot 1 from the strongest verified work evidence
-   - Experience slot 2 from the next strongest verified work/internship evidence
-6. PROJECT / PORTFOLIO
-   - Project slots from the strongest verified project/portfolio evidence
-7. CERTIFICATIONS
-8. ACHIEVEMENTS
-9. SKILLS & LANGUAGES
-
-Rules:
-- Do not invent credentials, employers, education, dates, certificates, languages, or achievements.
-- Use verified evidence only. Unverified evidence is intentionally excluded from the evidence bank below.
-- Do not freely rewrite the CV from scratch. Build the placeholders from the reusable CV tailoring framework, evidence-to-role mapping, and ready-to-copy checklist rows.
-- Treat the application pack as supporting context only, not as the source of truth.
-- If a field cannot be supported by verified profile/evidence/checklist data, return exactly "${warning}".
-- Aim for a one-page CV. Summary must be 65-85 words maximum. Work bullets must be one sentence, 18-28 words. Each project bullet must be one sentence, 22-32 words.
-- Experience titles, organizations, and dates must be copied or safely summarized from verified evidence/profile only. Do not invent companies, roles, or dates.
-- Preferred certification output is certifications for the dynamic {{CERTIFICATIONS}} placeholder.
-- certifications must be one compact pipe-separated string built from Recommended certification dynamic section exactly.
-- certificationBullet1 through certificationBullet4 are legacy compatibility fields only. Fill them with the first four certification items, but do not limit certifications to four items.
-- Never place competitions, achievements, work experience, projects, or portfolio items in Certifications. Those belong in Achievements, Experience, or Project sections.
-- If onePageCompressionMode is true in the framework, use the compact final certification text exactly and avoid adding extra detail.
-- Skills must be compact comma-separated or pipe-separated phrases.
-- Work experience bullet formula: action verb + scope/scale + method + business outcome.
-- Summary formula: candidate identity + relevant capability + quantified proof + target industry/function interest + role identity.
-- For MT / Generalist CV version, future leader potential may be mentioned only as potential. For non-MT roles, avoid generic future leader language.
-- Professional summary source priority has already been selected. If summarySource is "checklist" or "application_pack", copy selectedSummary exactly into professionalSummary.
-- Only generate professionalSummary as fallback if summarySource is "fallback_generated".
-- Fallback MT/BFLP/ODP/Future Leader professionalSummary must be 65-85 words, balanced, and not one compressed keyword sentence.
-- Follow certification priority when choosing certification and achievement emphasis.
-- If English/TOEFL is required and verified English score evidence exists, put it first in Certifications.
-- Move role alignment into professionalSummary or relevant work/project bullet.
-- Use project1 through project3 for the strongest verified project evidence when present. Do not add project names or AI productivity claims unless they exist in verified evidence.
-- Do not include application notes, cover-letter language, recruiter outreach, or explanation.
-- Do not include sections named Targeted Experience Highlights, Role Alignment, or Application Notes.
-- Tailor wording to the selected company and role while staying truthful.
-- hardSkills, softSkills, and languages should be pipe-separated strings.
-- Reduce noise: avoid excessive technical stack for non-technical business roles, unverified claims, fake seniority, overclaimed leadership, niche internal terms, and buzzwords without evidence.
-- Avoid risky fresh-graduate phrases: "leading large-scale operations", "executive stakeholders", "leadership excellence", "Google-certified AI professional", "engineered", and "high-stakes operational coordination".
-- Prefer safer wording: hands-on experience in operations coordination, supported project visibility, cross-functional communication, performance monitoring, data-driven decision-making, digital channel analysis, process improvement, and future leadership potential.
-
-Reusable CV tailoring framework (compact prompt view, debug-only fields removed):
-${JSON.stringify(promptFramework, null, 2)}
-
-Recommended certification dynamic section from verified evidence:
-${JSON.stringify(certificationEvidenceSelected, null, 2)}
-
-Selected opportunity:
-${JSON.stringify({
-  id: opportunity?.id,
-  company: opportunity?.company,
-  role: opportunity?.role,
-  fitScore: opportunity?.fitScore,
-  decision: opportunity?.decision,
-  roleDna: opportunity?.roleDna,
-  jobText: capJobText(opportunity?.jobText || '')
-}, null, 2)}
-
-Candidate profile:
-${JSON.stringify(compactProfile(profile), null, 2)}
-
-Application pack summary context only:
-${JSON.stringify({
-  applicationEnergy: pack?.applicationEnergy,
-  cvAction: pack?.cvAction,
-  cvAngle: pack?.cvAngle,
-  keywordsToEmphasize: pack?.keywordsToEmphasize,
-  summaryRewrite: pack?.summaryRewrite,
-  bulletPrioritization: pack?.bulletPrioritization,
-  portfolioEvidence: pack?.portfolioEvidence
-}, null, 2)}
-
-Top relevant verified evidence only (compact, deduped, capped at ${MAX_EVIDENCE_ITEMS_PER_CALL} items):
-${JSON.stringify(promptEvidences, null, 2)}
-
-Ready-to-copy CV checklist rows only:
-${JSON.stringify(compactReadyChecklistRows, null, 2)}
-`;
-
-    inputCharacterCount = prompt.length;
-    const dryRunPayload = {
-      dryRun: true,
-      endpointName: '/api/generate-cv-template',
-      model: GEMINI_MODEL,
-      opportunityId,
-      company: logCompany,
-      role: logRole,
-      inputCharacterCount,
-      estimatedInputTokens: estimateTokensFromChars(inputCharacterCount),
-      selectedEvidenceCount: promptEvidences.length,
-      selectedEvidenceIds: promptEvidences.map((evidence) => evidence.evidenceId || evidence.id || evidence.title).filter(Boolean),
-      readyChecklistRowsCount: compactReadyChecklistRows.length,
-      contextMode: resolvedContextMode,
-      maxInputCharsPerCall: MAX_INPUT_CHARS_PER_CALL,
-      maxEvidenceItemsPerCall: evidenceLimit,
-      jobTextWasTruncated: String(opportunity?.jobText || '').length > cappedOpportunityJobText.length,
-      contextSent: [
-        `${resolvedContextMode} CV tailoring framework`,
-        `top ${promptEvidences.length} verified evidence items`,
-        `${compactReadyChecklistRows.length} ready-to-copy checklist rows`,
-        'role DNA, eligibility evidence, CV rules, tone guard, and one-page constraints',
-        'application pack summary fields only'
-      ],
-      contextExcludedOrReduced: [
-        String(opportunity?.jobText || '').length > cappedOpportunityJobText.length ? 'long raw job text truncated' : 'job text within configured cap',
-        allEvidences.length > promptEvidences.length ? `${allEvidences.length - promptEvidences.length} evidence items excluded by ranking/cap` : 'no evidence excluded by evidence cap',
-        'raw certification candidate audit omitted from prompt',
-        'CV Brain debug/final placeholder JSON omitted from prompt',
-        'duplicate/stale generated text omitted from prompt'
-      ],
-      cacheKey,
-      promptPreview: prompt.slice(0, 6000)
-    };
-
     if (dryRun) {
+      const selectedEvidenceIds = promptEvidences
+        .map((evidence) => evidence.evidenceId || evidence.id || evidence.title)
+        .filter(Boolean);
       recordAiUsage({
         featureName: 'Generate CV Placeholder JSON',
         company: logCompany,
         role: logRole,
         opportunityId,
         endpointName: '/api/generate-cv-template',
-        model: GEMINI_MODEL,
-        inputCharacterCount,
-        outputCharacterCount: JSON.stringify(dryRunPayload).length,
-        estimatedInputTokens: estimateTokensFromChars(inputCharacterCount),
-        estimatedOutputTokens: estimateTokensFromChars(JSON.stringify(dryRunPayload).length),
-        estimatedTotalTokens: estimateTokensFromChars(inputCharacterCount) + estimateTokensFromChars(JSON.stringify(dryRunPayload).length),
+        model: 'local-cv-mapping',
+        inputCharacterCount: 0,
+        outputCharacterCount: 0,
+        estimatedInputTokens: 0,
+        estimatedOutputTokens: 0,
+        estimatedTotalTokens: 0,
         tokenCountSource: 'estimated',
         durationMs: Date.now() - startedAt,
         cacheStatus: 'dry_run',
         status: 'success'
       });
-      res.json(dryRunPayload);
+      res.json({
+        dryRun: true,
+        expectedAiCalls: 0,
+        endpointName: '/api/generate-cv-template',
+        opportunityId,
+        company: logCompany,
+        role: logRole,
+        contextMode: resolvedContextMode,
+        inputCharacterCount: 0,
+        estimatedInputTokens: 0,
+        selectedEvidenceCount: promptEvidences.length,
+        selectedEvidenceIds,
+        readyChecklistRowsCount: compactReadyChecklistRows.length,
+        maxInputCharsPerCall: 0,
+        maxEvidenceItemsPerCall: evidenceLimit,
+        jobTextWasTruncated: String(opportunity?.jobText || '').length > cappedOpportunityJobText.length,
+        cacheStatus: 'dry_run',
+        cachedOutputExists: aiResponseCache.has(cacheKey),
+        contextSent: [
+          'target role and company',
+          `top ${promptEvidences.length} verified evidence items`,
+          `${compactReadyChecklistRows.length} ready checklist rows`,
+          'local CV placeholder mapping rules'
+        ],
+        contextExcludedOrReduced: [
+          'no Gemini request is created for CV placeholder mapping',
+          'raw prompt text is not sent to any external AI provider',
+          allEvidences.length > promptEvidences.length ? `${allEvidences.length - promptEvidences.length} lower-ranked evidence items excluded from local preview` : 'all verified evidence stayed within the local preview cap'
+        ],
+        warning: 'Preview mode only. No Gemini or Google Docs call was made.'
+      });
       return;
     }
 
-    const ai = getGenAIClient(getRequestGeminiApiKey(req));
-    assertCostGuard(inputCharacterCount, { allowInputOverride: Boolean(overrideCostGuard) });
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            targetTitle: { type: Type.STRING },
-            professionalSummary: { type: Type.STRING },
-            experience1Title: { type: Type.STRING },
-            experience1Organization: { type: Type.STRING },
-            experience1Date: { type: Type.STRING },
-            experience1Bullet1: { type: Type.STRING },
-            experience1Bullet2: { type: Type.STRING },
-            experience1Bullet3: { type: Type.STRING },
-            experience2Title: { type: Type.STRING },
-            experience2Organization: { type: Type.STRING },
-            experience2Date: { type: Type.STRING },
-            experience2Bullet1: { type: Type.STRING },
-            experience2Bullet2: { type: Type.STRING },
-            experience2Bullet3: { type: Type.STRING },
-            project1Title: { type: Type.STRING },
-            project1Bullet1: { type: Type.STRING },
-            project2Title: { type: Type.STRING },
-            project2Bullet1: { type: Type.STRING },
-            project3Title: { type: Type.STRING },
-            project3Bullet1: { type: Type.STRING },
-            certifications: { type: Type.STRING },
-            certificationBullet1: { type: Type.STRING },
-            certificationBullet2: { type: Type.STRING },
-            certificationBullet3: { type: Type.STRING },
-            certificationBullet4: { type: Type.STRING },
-            achievementBullet1: { type: Type.STRING },
-            achievementBullet2: { type: Type.STRING },
-            achievementBullet3: { type: Type.STRING },
-            hardSkills: { type: Type.STRING },
-            softSkills: { type: Type.STRING },
-            languages: { type: Type.STRING }
-          },
-          required: [
-            'targetTitle',
-            'professionalSummary',
-            'experience1Title',
-            'experience1Organization',
-            'experience1Date',
-            'experience1Bullet1',
-            'experience1Bullet2',
-            'experience1Bullet3',
-            'experience2Title',
-            'experience2Organization',
-            'experience2Date',
-            'experience2Bullet1',
-            'experience2Bullet2',
-            'experience2Bullet3',
-            'project1Title',
-            'project1Bullet1',
-            'project2Title',
-            'project2Bullet1',
-            'project3Title',
-            'project3Bullet1',
-            'certifications',
-            'certificationBullet1',
-            'certificationBullet2',
-            'certificationBullet3',
-            'certificationBullet4',
-            'achievementBullet1',
-            'achievementBullet2',
-            'achievementBullet3',
-            'hardSkills',
-            'softSkills',
-            'languages'
-          ]
+    const parsedData: Record<string, string> = {};
+
+    parsedData.targetTitle = opportunity.role || pack.role || profile.targetRoles || 'Target Role';
+
+    const verified = allEvidences.filter((e) => e.isVerified);
+
+    const experienceGroupsMap = new Map<string, CvEvidenceInput[]>();
+    verified.forEach((e) => {
+      if (classifyEvidenceSection(e) === 'experience') {
+        const orgKey = (e.organization || '').trim().toLowerCase();
+        if (!experienceGroupsMap.has(orgKey)) {
+          experienceGroupsMap.set(orgKey, []);
+        }
+        experienceGroupsMap.get(orgKey)!.push(e);
+      }
+    });
+
+    const experienceGroups = Array.from(experienceGroupsMap.entries()).map(([orgKey, items]) => {
+      const itemsWithScores = items.map((item) => {
+        const score = scoreEvidenceForJob(item, cappedOpportunityJobText, preRoleDna);
+        return { item, score };
+      });
+      itemsWithScores.sort((a, b) => b.score - a.score);
+      const maxScore = itemsWithScores[0]?.score ?? -999;
+      return {
+        orgKey,
+        maxScore,
+        items: itemsWithScores.map((x) => x.item)
+      };
+    });
+
+    experienceGroups.sort((a, b) => b.maxScore - a.maxScore);
+
+    for (let slot = 1; slot <= 4; slot++) {
+      const group = experienceGroups[slot - 1];
+      if (group && group.items.length > 0) {
+        const highestItem = group.items[0];
+        parsedData[`experience${slot}Title`] = highestItem.title || '';
+        parsedData[`experience${slot}Organization`] = highestItem.organization || '';
+        parsedData[`experience${slot}Date`] = extractDateFromEvidence(highestItem);
+
+        const bullets: string[] = [];
+        group.items.forEach((item) => {
+          const text = getEvidenceBulletText(item, checklists);
+          const sentences = splitIntoSentences(text);
+          bullets.push(...sentences);
+        });
+
+        for (let b = 1; b <= 5; b++) {
+          parsedData[`experience${slot}Bullet${b}`] = bullets[b - 1] || '';
+        }
+      } else {
+        parsedData[`experience${slot}Title`] = '';
+        parsedData[`experience${slot}Organization`] = '';
+        parsedData[`experience${slot}Date`] = '';
+        for (let b = 1; b <= 5; b++) {
+          parsedData[`experience${slot}Bullet${b}`] = '';
+        }
+      }
+    }
+
+    const orgGroupsMap = new Map<string, CvEvidenceInput[]>();
+    verified.forEach((e) => {
+      if (classifyEvidenceSection(e) === 'organization') {
+        const orgKey = (e.organization || '').trim().toLowerCase();
+        if (!orgGroupsMap.has(orgKey)) {
+          orgGroupsMap.set(orgKey, []);
+        }
+        orgGroupsMap.get(orgKey)!.push(e);
+      }
+    });
+
+    const orgGroups = Array.from(orgGroupsMap.entries()).map(([orgKey, items]) => {
+      const itemsWithScores = items.map((item) => {
+        const score = scoreEvidenceForJob(item, cappedOpportunityJobText, preRoleDna);
+        return { item, score };
+      });
+      itemsWithScores.sort((a, b) => b.score - a.score);
+      const maxScore = itemsWithScores[0]?.score ?? -999;
+      return {
+        orgKey,
+        maxScore,
+        items: itemsWithScores.map((x) => x.item)
+      };
+    });
+
+    orgGroups.sort((a, b) => b.maxScore - a.maxScore);
+
+    for (let slot = 1; slot <= 3; slot++) {
+      const group = orgGroups[slot - 1];
+      if (group && group.items.length > 0) {
+        const highestItem = group.items[0];
+        parsedData[`organization${slot}Title`] = highestItem.title || '';
+        parsedData[`organization${slot}Organization`] = highestItem.organization || '';
+        parsedData[`organization${slot}Date`] = extractDateFromEvidence(highestItem);
+
+        const bullets: string[] = [];
+        group.items.forEach((item) => {
+          const text = getEvidenceBulletText(item, checklists);
+          const sentences = splitIntoSentences(text);
+          bullets.push(...sentences);
+        });
+
+        for (let b = 1; b <= 5; b++) {
+          parsedData[`organization${slot}Bullet${b}`] = bullets[b - 1] || '';
+        }
+      } else {
+        parsedData[`organization${slot}Title`] = '';
+        parsedData[`organization${slot}Organization`] = '';
+        parsedData[`organization${slot}Date`] = '';
+        for (let b = 1; b <= 5; b++) {
+          parsedData[`organization${slot}Bullet${b}`] = '';
+        }
+      }
+    }
+
+    const projectGroupsMap = new Map<string, CvEvidenceInput[]>();
+    verified.forEach((e) => {
+      if (classifyEvidenceSection(e) === 'project') {
+        const projKey = (e.organization || e.title || '').trim().toLowerCase();
+        if (projKey) {
+          if (!projectGroupsMap.has(projKey)) {
+            projectGroupsMap.set(projKey, []);
+          }
+          projectGroupsMap.get(projKey)!.push(e);
         }
       }
     });
 
-    let parsedData = JSON.parse(response.text || '{}');
-    const outputCharacterCount = response.text?.length || JSON.stringify(parsedData).length;
-    if (cvTailoringFramework.summarySource !== 'fallback_generated' && cvTailoringFramework.selectedSummary) {
-      parsedData.professionalSummary = limitWords(softenRiskyLanguage(cvTailoringFramework.selectedSummary), 85);
+    const projectGroups = Array.from(projectGroupsMap.entries()).map(([projKey, items]) => {
+      const itemsWithScores = items.map((item) => {
+        const score = scoreEvidenceForJob(item, cappedOpportunityJobText, preRoleDna);
+        return { item, score };
+      });
+      itemsWithScores.sort((a, b) => b.score - a.score);
+      const maxScore = itemsWithScores[0]?.score ?? -999;
+      return {
+        projKey,
+        maxScore,
+        items: itemsWithScores.map((x) => x.item)
+      };
+    });
+
+    projectGroups.sort((a, b) => b.maxScore - a.maxScore);
+
+    for (let slot = 1; slot <= 4; slot++) {
+      const group = projectGroups[slot - 1];
+      if (group && group.items.length > 0) {
+        const highestItem = group.items[0];
+        parsedData[`project${slot}Title`] = highestItem.title || '';
+
+        const bullets: string[] = [];
+        group.items.forEach((item) => {
+          const text = getEvidenceBulletText(item, checklists);
+          const sentences = splitIntoSentences(text);
+          bullets.push(...sentences);
+        });
+
+        for (let b = 1; b <= 5; b++) {
+          parsedData[`project${slot}Bullet${b}`] = bullets[b - 1] || '';
+        }
+      } else {
+        parsedData[`project${slot}Title`] = '';
+        for (let b = 1; b <= 5; b++) {
+          parsedData[`project${slot}Bullet${b}`] = '';
+        }
+      }
     }
-    parsedData = normalizeGeneratedCvFields(parsedData, certificationBullets, warning);
-    const onePageRiskWarning = estimateOnePageRisk(parsedData);
+
+    const achievementEvidences = verified.filter((e) => classifyEvidenceSection(e) === 'achievement');
+    const scoredAchievements = achievementEvidences.map((e) => {
+      const score = scoreEvidenceForJob(e, cappedOpportunityJobText, preRoleDna);
+      return { e, score };
+    });
+    scoredAchievements.sort((a, b) => b.score - a.score);
+
+    for (let slot = 1; slot <= 5; slot++) {
+      const item = scoredAchievements[slot - 1]?.e;
+      if (item) {
+        const text = getEvidenceBulletText(item, checklists);
+        const sentences = splitIntoSentences(text);
+        parsedData[`achievementBullet${slot}`] = sentences[0] || '';
+      } else {
+        parsedData[`achievementBullet${slot}`] = '';
+      }
+    }
+
+    parsedData.certifications = certificationBullets.join(' | ');
+    for (let i = 1; i <= 8; i++) {
+      parsedData[`certificationBullet${i}`] = certificationBullets[i - 1] || '';
+    }
+
+    const hardSkills = pack.hardSkills || preRoleDna.hardSkillSignals.join(' | ');
+    const softSkills = pack.softSkills || preRoleDna.softSkillSignals.join(' | ');
+    parsedData.hardSkills = hardSkills;
+    parsedData.softSkills = softSkills;
+
+    let languagesValue = 'Bahasa Indonesia (Native)';
+    const hasEnglishEvidence = verified.some((e) =>
+      /english|toefl|ielts|toeic|proficiency/i.test(`${e.title || ''} ${e.description || ''}`)
+    );
+    if (hasEnglishEvidence) {
+      languagesValue = 'Bahasa Indonesia (Native) | English (Professional)';
+    }
+    parsedData.languages = languagesValue;
+
+    const isFallbackSummary = (cvTailoringFramework.summarySource as string) === 'fallback' || cvTailoringFramework.summarySource === 'fallback_generated';
+    const professionalSummary = (!isFallbackSummary && cvTailoringFramework.selectedSummary)
+      ? cvTailoringFramework.selectedSummary
+      : buildFallbackSummary(profile, opportunity, hardSkills, verified);
+    parsedData.professionalSummary = professionalSummary;
+
+    const validatedFields = validateCvTemplateFields(parsedData);
+    const normalizedFields = normalizeGeneratedCvFields(validatedFields, certificationBullets, warning);
+
+    const onePageRiskWarning = estimateOnePageRisk(normalizedFields);
     const debug: CvTailoringFramework = {
       ...cvTailoringFramework,
       onePageRiskWarning: onePageRiskWarning || undefined,
@@ -2744,23 +2979,26 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
         ...(cvTailoringFramework.qualityWarnings || []),
         ...(onePageRiskWarning ? [onePageRiskWarning] : [])
       ],
-      finalPlaceholderJson: parsedData
+      finalPlaceholderJson: normalizedFields
     };
-    const payload = { fields: parsedData, debug, aiCacheKey: cacheKey };
+    const payload = { fields: normalizedFields, debug, aiCacheKey: cacheKey };
     aiResponseCache.set(cacheKey, payload);
-    const usage = tokenUsageFromResponse(response, inputCharacterCount, outputCharacterCount);
+
     recordAiUsage({
       featureName: 'Generate CV Placeholder JSON',
       company: logCompany,
       role: logRole,
       opportunityId,
       endpointName: '/api/generate-cv-template',
-      model: GEMINI_MODEL,
-      inputCharacterCount,
-      outputCharacterCount,
+      model: 'local-cv-mapping',
+      inputCharacterCount: 0,
+      outputCharacterCount: JSON.stringify(payload).length,
+      estimatedInputTokens: 0,
+      estimatedOutputTokens: 0,
+      estimatedTotalTokens: 0,
+      tokenCountSource: 'estimated',
       durationMs: Date.now() - startedAt,
       cacheStatus: 'miss',
-      ...usage,
       status: 'success'
     });
     res.json({ ...payload, cacheStatus: 'miss' });
@@ -2772,7 +3010,7 @@ ${JSON.stringify(compactReadyChecklistRows, null, 2)}
       role: logRole,
       opportunityId,
       endpointName: '/api/generate-cv-template',
-      model: GEMINI_MODEL,
+      model: 'local-cv-mapping',
       inputCharacterCount,
       outputCharacterCount: 0,
       estimatedInputTokens: estimateTokensFromChars(inputCharacterCount),

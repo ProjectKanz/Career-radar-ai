@@ -1,34 +1,109 @@
 import { ApplicationPack, CVEditChecklist, CVEvidence, CareerRadarOpportunity, Profile } from '../types';
 
 export interface CVTemplateFields {
+  [key: string]: string;
   targetTitle: string;
   professionalSummary: string;
+  workExperienceSection: string;
+  organizationalExperienceSection: string;
+  projectSection: string;
+  certificationSection: string;
+  achievementSection: string;
+  skillsSection: string;
   experience1Title: string;
   experience1Organization: string;
   experience1Date: string;
   experience1Bullet1: string;
   experience1Bullet2: string;
   experience1Bullet3: string;
+  experience1Bullet4: string;
+  experience1Bullet5: string;
   experience2Title: string;
   experience2Organization: string;
   experience2Date: string;
   experience2Bullet1: string;
   experience2Bullet2: string;
   experience2Bullet3: string;
+  experience2Bullet4: string;
+  experience2Bullet5: string;
+  experience3Title: string;
+  experience3Organization: string;
+  experience3Date: string;
+  experience3Bullet1: string;
+  experience3Bullet2: string;
+  experience3Bullet3: string;
+  experience3Bullet4: string;
+  experience3Bullet5: string;
+  experience4Title: string;
+  experience4Organization: string;
+  experience4Date: string;
+  experience4Bullet1: string;
+  experience4Bullet2: string;
+  experience4Bullet3: string;
+  experience4Bullet4: string;
+  experience4Bullet5: string;
+  organization1Title: string;
+  organization1Organization: string;
+  organization1Date: string;
+  organization1Bullet1: string;
+  organization1Bullet2: string;
+  organization1Bullet3: string;
+  organization1Bullet4: string;
+  organization1Bullet5: string;
+  organization2Title: string;
+  organization2Organization: string;
+  organization2Date: string;
+  organization2Bullet1: string;
+  organization2Bullet2: string;
+  organization2Bullet3: string;
+  organization2Bullet4: string;
+  organization2Bullet5: string;
+  organization3Title: string;
+  organization3Organization: string;
+  organization3Date: string;
+  organization3Bullet1: string;
+  organization3Bullet2: string;
+  organization3Bullet3: string;
+  organization3Bullet4: string;
+  organization3Bullet5: string;
   project1Title: string;
   project1Bullet1: string;
+  project1Bullet2: string;
+  project1Bullet3: string;
+  project1Bullet4: string;
+  project1Bullet5: string;
   project2Title: string;
   project2Bullet1: string;
+  project2Bullet2: string;
+  project2Bullet3: string;
+  project2Bullet4: string;
+  project2Bullet5: string;
   project3Title: string;
   project3Bullet1: string;
+  project3Bullet2: string;
+  project3Bullet3: string;
+  project3Bullet4: string;
+  project3Bullet5: string;
+  project4Title: string;
+  project4Bullet1: string;
+  project4Bullet2: string;
+  project4Bullet3: string;
+  project4Bullet4: string;
+  project4Bullet5: string;
   certifications: string;
   certificationBullet1: string;
   certificationBullet2: string;
   certificationBullet3: string;
   certificationBullet4: string;
+  certificationBullet5: string;
+  certificationBullet6: string;
+  certificationBullet7: string;
+  certificationBullet8: string;
   achievementBullet1: string;
   achievementBullet2: string;
   achievementBullet3: string;
+  achievementBullet4: string;
+  achievementBullet5: string;
   hardSkills: string;
   softSkills: string;
   languages: string;
@@ -69,6 +144,14 @@ export interface GeneratedDriveDoc {
 
 const CV_TEMPLATE_DOCUMENT_ID = '1elzdx1As8HcvDdOw8TYFcmh1DzFO5pk6fI9zkUj-_co';
 const WARNING = '[Needs verified input]';
+const EXPERIENCE_SLOT_COUNT = 4;
+const EXPERIENCE_BULLET_COUNT = 5;
+const ORGANIZATION_SLOT_COUNT = 3;
+const ORGANIZATION_BULLET_COUNT = 5;
+const PROJECT_SLOT_COUNT = 4;
+const PROJECT_BULLET_COUNT = 5;
+const CERTIFICATION_BULLET_COUNT = 8;
+const ACHIEVEMENT_BULLET_COUNT = 5;
 
 function escapeHtml(value: string | number | undefined | null) {
   return String(value ?? '')
@@ -90,6 +173,11 @@ function safeFilePart(value: string | undefined) {
 function templateValue(value: string | undefined) {
   const cleaned = String(value || '').trim();
   return cleaned || WARNING;
+}
+
+function hasTemplateValue(value: string | undefined) {
+  const cleaned = String(value || '').trim();
+  return Boolean(cleaned && cleaned !== WARNING);
 }
 
 function bullet(value: string | undefined) {
@@ -153,9 +241,15 @@ export function validateCvTemplateFields(input: Partial<CVTemplateFields & Legac
     input.certificationBullet4
   ].map((item) => String(item || '').trim()).filter(Boolean).join(' | ');
 
-  return {
+  const fields = {
     targetTitle: templateValue(input.targetTitle),
     professionalSummary: templateValue(input.professionalSummary),
+    workExperienceSection: templateValue(input.workExperienceSection),
+    organizationalExperienceSection: templateValue(input.organizationalExperienceSection),
+    projectSection: templateValue(input.projectSection),
+    certificationSection: templateValue(input.certificationSection),
+    achievementSection: templateValue(input.achievementSection),
+    skillsSection: templateValue(input.skillsSection),
     experience1Title: templateValue(input.experience1Title),
     experience1Organization: templateValue(input.experience1Organization),
     experience1Date: templateValue(input.experience1Date),
@@ -185,12 +279,97 @@ export function validateCvTemplateFields(input: Partial<CVTemplateFields & Legac
     hardSkills: templateValue(input.hardSkills),
     softSkills: templateValue(input.softSkills),
     languages: templateValue(input.languages)
-  };
+  } as CVTemplateFields;
+
+  for (let slot = 1; slot <= EXPERIENCE_SLOT_COUNT; slot += 1) {
+    fields[`experience${slot}Title`] = templateValue(input[`experience${slot}Title`]);
+    fields[`experience${slot}Organization`] = templateValue(input[`experience${slot}Organization`]);
+    fields[`experience${slot}Date`] = templateValue(input[`experience${slot}Date`]);
+    for (let bulletIndex = 1; bulletIndex <= EXPERIENCE_BULLET_COUNT; bulletIndex += 1) {
+      fields[`experience${slot}Bullet${bulletIndex}`] = templateValue(input[`experience${slot}Bullet${bulletIndex}`]);
+    }
+  }
+
+  fields.experience1Bullet1 = templateValue(input.experience1Bullet1 || input.csaBullet1);
+  fields.experience1Bullet2 = templateValue(input.experience1Bullet2 || input.csaBullet2);
+  fields.experience1Bullet3 = templateValue(input.experience1Bullet3 || input.csaBullet3);
+  fields.experience2Bullet1 = templateValue(input.experience2Bullet1 || input.xlBullet1);
+  fields.experience2Bullet2 = templateValue(input.experience2Bullet2 || input.xlBullet2);
+  fields.experience2Bullet3 = templateValue(input.experience2Bullet3 || input.xlBullet3);
+
+  for (let slot = 1; slot <= ORGANIZATION_SLOT_COUNT; slot += 1) {
+    fields[`organization${slot}Title`] = templateValue(input[`organization${slot}Title`]);
+    fields[`organization${slot}Organization`] = templateValue(input[`organization${slot}Organization`]);
+    fields[`organization${slot}Date`] = templateValue(input[`organization${slot}Date`]);
+    for (let bulletIndex = 1; bulletIndex <= ORGANIZATION_BULLET_COUNT; bulletIndex += 1) {
+      fields[`organization${slot}Bullet${bulletIndex}`] = templateValue(input[`organization${slot}Bullet${bulletIndex}`]);
+    }
+  }
+
+  for (let slot = 1; slot <= PROJECT_SLOT_COUNT; slot += 1) {
+    fields[`project${slot}Title`] = templateValue(input[`project${slot}Title`]);
+    for (let bulletIndex = 1; bulletIndex <= PROJECT_BULLET_COUNT; bulletIndex += 1) {
+      fields[`project${slot}Bullet${bulletIndex}`] = templateValue(input[`project${slot}Bullet${bulletIndex}`]);
+    }
+  }
+  fields.project1Bullet1 = templateValue(input.project1Bullet1 || input.portfolioBullet1);
+  fields.project2Bullet1 = templateValue(input.project2Bullet1 || input.portfolioBullet2);
+  fields.project3Bullet1 = templateValue(input.project3Bullet1 || input.portfolioBullet3);
+
+  for (let bulletIndex = 1; bulletIndex <= CERTIFICATION_BULLET_COUNT; bulletIndex += 1) {
+    fields[`certificationBullet${bulletIndex}`] = templateValue(input[`certificationBullet${bulletIndex}`]);
+  }
+
+  for (let bulletIndex = 1; bulletIndex <= ACHIEVEMENT_BULLET_COUNT; bulletIndex += 1) {
+    fields[`achievementBullet${bulletIndex}`] = templateValue(input[`achievementBullet${bulletIndex}`]);
+  }
+
+  return fields;
 }
 
 export function buildCvHtml(input: RenderCvInput) {
   const { profile, templateFields } = input;
   const fields = validateCvTemplateFields(templateFields);
+  const renderRoleBlocks = (prefix: 'experience' | 'organization', slotCount: number, bulletCount: number) => (
+    Array.from({ length: slotCount }, (_, index) => index + 1)
+      .map((slot) => {
+        const title = fields[`${prefix}${slot}Title`];
+        const organization = fields[`${prefix}${slot}Organization`];
+        const date = fields[`${prefix}${slot}Date`];
+        const bullets = Array.from({ length: bulletCount }, (_, bulletIndex) => fields[`${prefix}${slot}Bullet${bulletIndex + 1}`])
+          .filter(hasTemplateValue);
+        if (![title, organization, date].some(hasTemplateValue) && bullets.length === 0) return '';
+        return `
+    <h3>${escapeHtml(templateValue(title))}</h3>
+    <p class="meta">${escapeHtml([organization, date].filter(hasTemplateValue).join(' | ') || WARNING)}</p>
+    <ul>
+      ${bullets.map((item) => bullet(item)).join('\n      ')}
+    </ul>`;
+      })
+      .filter(Boolean)
+      .join('\n')
+  );
+  const renderProjectBlocks = () => (
+    Array.from({ length: PROJECT_SLOT_COUNT }, (_, index) => index + 1)
+      .map((slot) => {
+        const title = fields[`project${slot}Title`];
+        const projectBullets = Array.from({ length: PROJECT_BULLET_COUNT }, (_, bulletIndex) => fields[`project${slot}Bullet${bulletIndex + 1}`])
+          .filter(hasTemplateValue);
+        if (!hasTemplateValue(title) && projectBullets.length === 0) return '';
+        return `
+    <h3>${escapeHtml(templateValue(title))}</h3>
+    <ul>
+      ${projectBullets.map((item) => bullet(item)).join('\n      ')}
+    </ul>`;
+      })
+      .filter(Boolean)
+      .join('\n')
+  );
+  const achievementBullets = Array.from({ length: ACHIEVEMENT_BULLET_COUNT }, (_, index) => fields[`achievementBullet${index + 1}`])
+    .filter(hasTemplateValue);
+  const experienceHtml = renderRoleBlocks('experience', EXPERIENCE_SLOT_COUNT, EXPERIENCE_BULLET_COUNT);
+  const organizationHtml = renderRoleBlocks('organization', ORGANIZATION_SLOT_COUNT, ORGANIZATION_BULLET_COUNT);
+  const projectHtml = renderProjectBlocks();
 
   return `
 <!doctype html>
@@ -267,35 +446,12 @@ export function buildCvHtml(input: RenderCvInput) {
     <p>${escapeHtml(profile.education || WARNING)}</p>
 
     <h2>Work Experience</h2>
-    <h3>${escapeHtml(fields.experience1Title)}</h3>
-    <p class="meta">${escapeHtml([fields.experience1Organization, fields.experience1Date].filter((item) => item && item !== WARNING).join(' | ') || WARNING)}</p>
-    <ul>
-      ${bullet(fields.experience1Bullet1)}
-      ${bullet(fields.experience1Bullet2)}
-      ${bullet(fields.experience1Bullet3)}
-    </ul>
+    ${experienceHtml || `<p>${escapeHtml(fields.workExperienceSection)}</p>`}
 
-    <h3>${escapeHtml(fields.experience2Title)}</h3>
-    <p class="meta">${escapeHtml([fields.experience2Organization, fields.experience2Date].filter((item) => item && item !== WARNING).join(' | ') || WARNING)}</p>
-    <ul>
-      ${bullet(fields.experience2Bullet1)}
-      ${bullet(fields.experience2Bullet2)}
-      ${bullet(fields.experience2Bullet3)}
-    </ul>
+    ${organizationHtml ? `<h2>Organizational Experience</h2>${organizationHtml}` : ''}
 
-    <h2>Project / Portfolio</h2>
-    <h3>${escapeHtml(fields.project1Title)}</h3>
-    <ul>
-      ${bullet(fields.project1Bullet1)}
-    </ul>
-    <h3>${escapeHtml(fields.project2Title)}</h3>
-    <ul>
-      ${bullet(fields.project2Bullet1)}
-    </ul>
-    <h3>${escapeHtml(fields.project3Title)}</h3>
-    <ul>
-      ${bullet(fields.project3Bullet1)}
-    </ul>
+    <h2>Project / Portfolio / Volunteering</h2>
+    ${projectHtml || `<p>${escapeHtml(fields.projectSection)}</p>`}
 
     <h2>Certifications</h2>
     <ul>
@@ -304,9 +460,7 @@ export function buildCvHtml(input: RenderCvInput) {
 
     <h2>Achievements</h2>
     <ul>
-      ${bullet(fields.achievementBullet1)}
-      ${bullet(fields.achievementBullet2)}
-      ${bullet(fields.achievementBullet3)}
+      ${achievementBullets.length ? achievementBullets.map((item) => bullet(item)).join('\n      ') : bullet(fields.achievementSection)}
     </ul>
 
     <h2>Skills &amp; Languages</h2>
@@ -321,30 +475,10 @@ export function buildCvHtml(input: RenderCvInput) {
 function replacementMap(fields: CVTemplateFields, profile?: Profile) {
   const safeFields = validateCvTemplateFields(fields);
 
-  return {
+  const replacements: Record<string, string> = {
     '{{FULL_NAME}}': profile?.fullName || WARNING,
     '{{CONTACT_LINE}}': buildContactLine(profile || { fullName: '', education: '', experienceBrief: '', targetRoles: '', updatedAt: '' }),
-    '{{TARGET_TITLE}}': safeFields.targetTitle,
-    '{{PROFESSIONAL_SUMMARY}}': safeFields.professionalSummary,
     '{{EDUCATION}}': profile?.education || WARNING,
-    '{{EXPERIENCE_1_TITLE}}': safeFields.experience1Title,
-    '{{EXPERIENCE_1_ORGANIZATION}}': safeFields.experience1Organization,
-    '{{EXPERIENCE_1_DATE}}': safeFields.experience1Date,
-    '{{EXPERIENCE_1_BULLET_1}}': safeFields.experience1Bullet1,
-    '{{EXPERIENCE_1_BULLET_2}}': safeFields.experience1Bullet2,
-    '{{EXPERIENCE_1_BULLET_3}}': safeFields.experience1Bullet3,
-    '{{EXPERIENCE_2_TITLE}}': safeFields.experience2Title,
-    '{{EXPERIENCE_2_ORGANIZATION}}': safeFields.experience2Organization,
-    '{{EXPERIENCE_2_DATE}}': safeFields.experience2Date,
-    '{{EXPERIENCE_2_BULLET_1}}': safeFields.experience2Bullet1,
-    '{{EXPERIENCE_2_BULLET_2}}': safeFields.experience2Bullet2,
-    '{{EXPERIENCE_2_BULLET_3}}': safeFields.experience2Bullet3,
-    '{{PROJECT_1_TITLE}}': safeFields.project1Title,
-    '{{PROJECT_1_BULLET_1}}': safeFields.project1Bullet1,
-    '{{PROJECT_2_TITLE}}': safeFields.project2Title,
-    '{{PROJECT_2_BULLET_1}}': safeFields.project2Bullet1,
-    '{{PROJECT_3_TITLE}}': safeFields.project3Title,
-    '{{PROJECT_3_BULLET_1}}': safeFields.project3Bullet1,
     '{{CSA_BULLET_1}}': safeFields.experience1Bullet1,
     '{{CSA_BULLET_2}}': safeFields.experience1Bullet2,
     '{{CSA_BULLET_3}}': safeFields.experience1Bullet3,
@@ -353,19 +487,15 @@ function replacementMap(fields: CVTemplateFields, profile?: Profile) {
     '{{XL_BULLET_3}}': safeFields.experience2Bullet3,
     '{{PORTFOLIO_BULLET_1}}': safeFields.project1Bullet1,
     '{{PORTFOLIO_BULLET_2}}': safeFields.project2Bullet1,
-    '{{PORTFOLIO_BULLET_3}}': safeFields.project3Bullet1,
-    '{{CERTIFICATIONS}}': safeFields.certifications,
-    '{{CERTIFICATION_BULLET_1}}': safeFields.certificationBullet1,
-    '{{CERTIFICATION_BULLET_2}}': safeFields.certificationBullet2,
-    '{{CERTIFICATION_BULLET_3}}': safeFields.certificationBullet3,
-    '{{CERTIFICATION_BULLET_4}}': safeFields.certificationBullet4,
-    '{{ACHIEVEMENT_BULLET_1}}': safeFields.achievementBullet1,
-    '{{ACHIEVEMENT_BULLET_2}}': safeFields.achievementBullet2,
-    '{{ACHIEVEMENT_BULLET_3}}': safeFields.achievementBullet3,
-    '{{HARD_SKILLS}}': safeFields.hardSkills,
-    '{{SOFT_SKILLS}}': safeFields.softSkills,
-    '{{LANGUAGES}}': safeFields.languages
+    '{{PORTFOLIO_BULLET_3}}': safeFields.project3Bullet1
   };
+
+  Object.entries(safeFields).forEach(([key, value]) => {
+    const placeholder = `{{${key.replace(/([a-z])([A-Z])/g, '$1_$2').replace(/([a-zA-Z])(\d)/g, '$1_$2').toUpperCase()}}}`;
+    replacements[placeholder] = value;
+  });
+
+  return replacements;
 }
 
 async function googleApiError(response: Response, prefix: string) {

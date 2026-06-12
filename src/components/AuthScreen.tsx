@@ -68,14 +68,14 @@ export default function AuthScreen({ onLoginSuccess, loading, setLoading }: Auth
             Match Jobs Against Real CV Evidence
           </h2>
           <p className="text-sm text-slate-500 mb-8 max-w-sm mx-auto">
-            Paste a job post, compare it with verified profile evidence, preview AI cost, and generate tailored CV drafts into your own Google Drive.
+            Paste a job post, compare it with verified profile evidence, preview AI cost, and generate tailored CV drafts into your own Google Drive with local CV placeholder mapping.
           </p>
 
           {/* Core Feature List */}
           <div className="space-y-4 text-left mb-8 max-w-xs mx-auto">
             <div className="flex items-start space-x-3 text-slate-600">
               <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
-              <div className="text-sm font-medium">CV Evidence Fact-Bank</div>
+              <div className="text-sm font-medium">CV Evidence Bank</div>
             </div>
             <div className="flex items-start space-x-3 text-slate-600">
               <Radar className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
@@ -96,9 +96,9 @@ export default function AuthScreen({ onLoginSuccess, loading, setLoading }: Auth
           </div>
 
           <div className="mb-8 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-left">
-            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Safe public demo</div>
+            <div className="text-xs font-bold uppercase tracking-wider text-emerald-700">Internal testing mode</div>
             <p className="mt-1 text-xs leading-relaxed text-slate-600">
-              Try the workflow with Dry Run for free. Real AI generation requires your own Gemini API key in AI Settings, so visitor usage does not consume the project owner's quota.
+              Try the workflow with Dry Run for free. AI-assisted onboarding and matching require your own Gemini API key, while CV placeholder mapping runs locally.
             </p>
           </div>
 

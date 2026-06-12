@@ -4,7 +4,7 @@ import { collection, query, getDocsFromCache, getDocsFromServer, doc, deleteDoc,
 import { db, formatFirestoreServerError, handleFirestoreError, OperationType, requestGoogleDriveAccessToken } from '../firebase';
 import { CareerRadarOpportunity, ApplicationPack, CVEditChecklist, CVEvidence, Profile, CvGenerationDebug } from '../types';
 import { CVTemplateFields, createCvGoogleDoc, downloadCvDoc, extractDriveFolderId, validateCvTemplateFields } from '../utils/cvDrive';
-import { aiRequestHeaders, hasStoredGeminiApiKey } from '../utils/aiSettings';
+import { userFacingAiError, userFacingCvError } from '../utils/aiSettings';
 
 interface OpportunitiesPanelProps {
   userId: string;
@@ -39,32 +39,6 @@ interface AiCostConfig {
   dailyAiCallLimitDev: number;
   dailyAiCallsUsed: number;
   requireConfirmForRegenerate: boolean;
-}
-
-interface CvRequestPreview {
-  endpointName: string;
-  model: string;
-  opportunityId?: string;
-  company?: string;
-  role?: string;
-  inputCharacterCount: number;
-  estimatedInputTokens: number;
-  selectedEvidenceCount: number;
-  selectedEvidenceIds?: string[];
-  readyChecklistRowsCount?: number;
-  contextMode?: 'standard' | 'compact';
-  maxInputCharsPerCall?: number;
-  maxEvidenceItemsPerCall?: number;
-  jobTextWasTruncated?: boolean;
-  contextSent?: string[];
-  contextExcludedOrReduced?: string[];
-}
-
-interface BlockedCvRequest {
-  opportunity: CareerRadarOpportunity;
-  pack: ApplicationPack;
-  preview: CvRequestPreview;
-  reason: string;
 }
 
 type CvContextMode = 'standard' | 'compact';
@@ -247,12 +221,14 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
   const [dryRunAi, setDryRunAi] = useState(() => localStorage.getItem('careerRadarDryRunAi') === 'true');
   const [useCachedOutput, setUseCachedOutput] = useState(() => localStorage.getItem('careerRadarUseCachedOutput') !== 'false');
   const [costConfig, setCostConfig] = useState<AiCostConfig | null>(null);
-  const [blockedCvRequest, setBlockedCvRequest] = useState<BlockedCvRequest | null>(null);
   const [opportunitySearch, setOpportunitySearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<OpportunityStatusFilter>('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [companyFilter, setCompanyFilter] = useState('all');
   const [sortMode, setSortMode] = useState<OpportunitySortMode>('newest');
+
+  const generatedCount = (Object.values(packs) as ApplicationPack[]).filter(p => p.cvReadyStatus === 'Generated').length;
+  const savingsAmount = generatedCount * 1200;
 
   const opportunitiesPath = `profiles/${userId}/opportunities`;
 
@@ -488,7 +464,7 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
     evidences: CVEvidence[],
     checklists: CVEditChecklist[],
     forceAi = false,
-    options: { contextMode?: CvContextMode; overrideCostGuard?: boolean } = {}
+    options: { contextMode?: CvContextMode } = {}
   ): Promise<CvTemplateGenerationResult> => {
     const cachedFields = pack.cvGenerationDebug?.finalPlaceholderJson;
     if (useCachedOutput && !forceAi && cachedFields) {
@@ -498,13 +474,9 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
       };
     }
 
-    if (!dryRunAi && !hasStoredGeminiApiKey()) {
-      throw new Error('Add your Gemini API key in AI Settings, or turn on Dry Run / Use Cached Output to avoid AI cost.');
-    }
-
     const response = await fetch('/api/generate-cv-template', {
       method: 'POST',
-      headers: aiRequestHeaders(),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         profile,
         opportunity: opp,
@@ -513,8 +485,7 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
         checklists,
         dryRun: dryRunAi,
         useCachedOutput,
-        contextMode: options.contextMode || 'standard',
-        overrideCostGuard: Boolean(options.overrideCostGuard)
+        contextMode: options.contextMode || 'standard'
       })
     });
 
@@ -522,72 +493,26 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
       let errorMessage = 'CV template generation failed.';
       try {
         const errorData = await response.json();
-        errorMessage = errorData.error || errorMessage;
+        errorMessage = userFacingAiError(errorData.error || errorMessage);
       } catch (_) {}
       throw new Error(errorMessage);
     }
 
     const data = await response.json();
     if (data.dryRun) {
-      throw new Error(`Dry Run only: ${data.inputCharacterCount?.toLocaleString?.() || data.inputCharacterCount} input chars, about ${data.estimatedInputTokens?.toLocaleString?.() || data.estimatedInputTokens} tokens, ${data.selectedEvidenceCount} evidence items selected. No Gemini call was made.`);
+      const selectedEvidenceCount = Number(data.selectedEvidenceCount || 0);
+      const readyChecklistRowsCount = Number(data.readyChecklistRowsCount || 0);
+      throw new Error(`Dry Run complete: local CV mapping checked ${selectedEvidenceCount} verified evidence items and ${readyChecklistRowsCount} ready checklist rows. No Gemini or Google Docs call was made.`);
+    }
+
+    if (!dryRunAi) {
+      const currentCount = Number(localStorage.getItem('careerRadarLocalCvBypasses') || 0);
+      localStorage.setItem('careerRadarLocalCvBypasses', String(currentCount + 1));
     }
 
     return {
       templateFields: validateCvTemplateFields(data.fields || data),
       debug: data.debug
-    };
-  };
-
-  const previewCvTemplateRequest = async (
-    opp: CareerRadarOpportunity,
-    pack: ApplicationPack,
-    profile: Profile,
-    evidences: CVEvidence[],
-    checklists: CVEditChecklist[],
-    contextMode: CvContextMode
-  ): Promise<CvRequestPreview> => {
-    const response = await fetch('/api/generate-cv-template', {
-      method: 'POST',
-      headers: aiRequestHeaders(),
-      body: JSON.stringify({
-        profile,
-        opportunity: opp,
-        pack,
-        evidences,
-        checklists,
-        dryRun: true,
-        useCachedOutput,
-        contextMode
-      })
-    });
-
-    if (!response.ok) {
-      let errMsg = 'CV request preview failed on back-end server.';
-      try {
-        const errData = await response.json();
-        if (errData?.error) errMsg = errData.error;
-      } catch (_) {}
-      throw new Error(errMsg);
-    }
-
-    const data = await response.json();
-    return {
-      endpointName: data.endpointName || '/api/generate-cv-template',
-      model: data.model || costConfig?.model || 'gemini',
-      opportunityId: data.opportunityId || opp.id,
-      company: data.company || opp.company,
-      role: data.role || opp.role,
-      inputCharacterCount: Number(data.inputCharacterCount || 0),
-      estimatedInputTokens: Number(data.estimatedInputTokens || 0),
-      selectedEvidenceCount: Number(data.selectedEvidenceCount || 0),
-      selectedEvidenceIds: Array.isArray(data.selectedEvidenceIds) ? data.selectedEvidenceIds : [],
-      readyChecklistRowsCount: Number(data.readyChecklistRowsCount || 0),
-      contextMode: data.contextMode === 'compact' ? 'compact' : 'standard',
-      maxInputCharsPerCall: Number(data.maxInputCharsPerCall || costConfig?.maxInputCharsPerCall || 0),
-      maxEvidenceItemsPerCall: Number(data.maxEvidenceItemsPerCall || costConfig?.maxEvidenceItemsPerCall || 0),
-      jobTextWasTruncated: Boolean(data.jobTextWasTruncated),
-      contextSent: Array.isArray(data.contextSent) ? data.contextSent : [],
-      contextExcludedOrReduced: Array.isArray(data.contextExcludedOrReduced) ? data.contextExcludedOrReduced : []
     };
   };
 
@@ -605,9 +530,9 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
         setCvDebugs((current) => ({ ...current, [opp.id || '']: debug }));
       }
       downloadCvDoc({ profile, opportunity: opp, pack, evidences, checklists, templateFields });
-    } catch (err) {
+    } catch (err: any) {
       console.error('CV download failed:', err);
-      setCvError(err instanceof Error ? err.message : String(err));
+      setCvError(userFacingAiError(err.message || err || 'CV download failed.'));
     } finally {
       setDownloadingCvId(null);
     }
@@ -617,7 +542,7 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
     opp: CareerRadarOpportunity,
     pack: ApplicationPack,
     e?: React.MouseEvent,
-    options: { contextMode?: CvContextMode; overrideCostGuard?: boolean; skipPreflight?: boolean } = {}
+    options: { contextMode?: CvContextMode } = {}
   ) => {
     e?.stopPropagation();
     if (!opp.id) return;
@@ -625,7 +550,7 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
     const hasCachedCvJson = Boolean(pack.cvGenerationDebug?.finalPlaceholderJson);
     const isRegenerate = Boolean(pack.cvReadyLink || hasCachedCvJson);
     if (!dryRunAi && isRegenerate && !useCachedOutput && costConfig?.requireConfirmForRegenerate) {
-      const proceed = window.confirm('Regenerate with AI will spend another Gemini call. Turn on Use Cached Output to reuse the existing CV JSON. Continue?');
+      const proceed = window.confirm('Regenerate CV will overwrite the current local placeholder JSON and Google Docs output. Use Cached Output to reuse the existing CV JSON. Continue?');
       if (!proceed) return;
     }
 
@@ -633,17 +558,16 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
     localStorage.setItem('careerRadarCvDriveFolder', driveFolderInput.trim());
     setGeneratingCvId(opp.id);
     setCvError(null);
-    setBlockedCvRequest(null);
     const startedAt = new Date().toISOString();
     const generatingPack: ApplicationPack = {
       ...pack,
       cvReadyStatus: 'Generating',
       cvReadyAt: startedAt,
-      cvReadyNotes: 'Requesting Google Drive/Docs access...',
+      cvReadyNotes: dryRunAi ? 'Previewing local CV placeholder mapping...' : 'Requesting Google Drive/Docs access...',
       updatedAt: startedAt
     };
     updatePackInState(opp.id, generatingPack);
-    setCvProgressStep(opp.id, 'Requesting Google Drive/Docs access', {
+    setCvProgressStep(opp.id, dryRunAi ? 'Previewing local CV placeholder mapping' : 'Requesting Google Drive/Docs access', {
       status: 'running',
       startedAt
     });
@@ -654,25 +578,6 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
       const usingCachedJson = useCachedOutput && hasCachedCvJson;
       const contextMode = options.contextMode || 'standard';
 
-      if (!dryRunAi && !usingCachedJson && !options.skipPreflight) {
-        setCvProgressStep(opp.id, contextMode === 'compact' ? 'Preparing compact AI request preview' : 'Preparing AI request preview');
-        const preview = await previewCvTemplateRequest(opp, pack, profile, evidences, checklists, contextMode);
-        const maxChars = preview.maxInputCharsPerCall || costConfig?.maxInputCharsPerCall || 0;
-        if (maxChars > 0 && preview.inputCharacterCount > maxChars && !options.overrideCostGuard) {
-          const reason = `CV request is ${preview.inputCharacterCount.toLocaleString()} chars, above the configured ${maxChars.toLocaleString()} char guard.`;
-          setBlockedCvRequest({ opportunity: opp, pack, preview, reason });
-          setCvError(reason);
-          setCvProgressStep(opp.id, 'Needs decision before AI call', {
-            status: 'error',
-            finishedAt: new Date().toISOString(),
-            errorMessage: reason
-          });
-          updatePackInState(opp.id, pack);
-          setGeneratingCvId(null);
-          return;
-        }
-      }
-
       let accessToken = '';
       if (!dryRunAi) {
         if (!usingCachedJson) {
@@ -681,11 +586,8 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
         accessToken = await requestGoogleDriveAccessToken();
       }
 
-      setCvProgressStep(opp.id, useCachedOutput && hasCachedCvJson ? 'Using cached CV placeholder JSON' : 'Generating CV placeholder JSON');
-      const { templateFields, debug } = await generateTemplateFields(opp, pack, profile, evidences, checklists, false, {
-        contextMode,
-        overrideCostGuard: Boolean(options.overrideCostGuard)
-      });
+      setCvProgressStep(opp.id, useCachedOutput && hasCachedCvJson ? 'Using cached CV placeholder JSON' : 'Generating local CV placeholder JSON');
+      const { templateFields, debug } = await generateTemplateFields(opp, pack, profile, evidences, checklists, false, { contextMode });
       if (debug) {
         setCvDebugs((current) => ({ ...current, [opp.id || '']: debug }));
       }
@@ -768,20 +670,21 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
         documentName: driveDoc.name,
         documentLink: driveDoc.webViewLink
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('CV generation failed:', err);
-      const message = err instanceof Error ? err.message : String(err);
-      if (dryRunAi && message.startsWith('Dry Run')) {
-        setCvError(message);
+      const rawMessage = err instanceof Error ? err.message : String(err);
+      if (dryRunAi && rawMessage.startsWith('Dry Run')) {
+        setCvError(rawMessage);
         setCvProgressStep(opp.id, 'Dry Run complete', {
           status: 'success',
           finishedAt: new Date().toISOString(),
-          errorMessage: message
+          errorMessage: rawMessage
         });
         updatePackInState(opp.id, pack);
         return;
       }
 
+      const message = userFacingCvError(rawMessage);
       setCvError(message);
       const failedAt = new Date().toISOString();
       const failedPack: ApplicationPack = {
@@ -823,6 +726,23 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
           <p className="mt-1 text-sm text-slate-500">
             Browse match-screened jobs, view custom fit parameters, and extract custom summary rewrites, outreach pitches, and recruiter message templates.
           </p>
+          <div className="mt-4 flex items-center space-x-3 bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-2xl p-4 shadow-sm">
+            <div className="flex items-center space-x-2 shrink-0">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <Wand2 className="h-5 w-5 text-emerald-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-sm font-bold leading-tight">
+                Estimated Rp {savingsAmount.toLocaleString('id-ID')} avoided by local mapping
+              </h4>
+              <p className="text-xs text-emerald-600 font-medium mt-0.5">
+                ({generatedCount} CV template runs completed without Gemini API)
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -837,83 +757,6 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
         <div className="mb-6 rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           <div className="font-bold text-rose-900">Firestore server read failed</div>
           <div className="mt-1">{serverReadError}</div>
-        </div>
-      )}
-
-      {blockedCvRequest && (
-        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 shadow-sm">
-          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-            <div>
-              <div className="text-xs font-extrabold uppercase tracking-wider text-amber-700">Expensive AI Request Needs Decision</div>
-              <h3 className="mt-1 text-lg font-extrabold text-slate-900">
-                {safeText(blockedCvRequest.opportunity.company)} - {safeText(blockedCvRequest.opportunity.role)}
-              </h3>
-              <p className="mt-2 leading-relaxed">{blockedCvRequest.reason} No Gemini call has been made yet.</p>
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
-                <div className="rounded-xl bg-white/70 px-3 py-2 border border-amber-100">
-                  <div className="font-bold text-slate-500">Endpoint</div>
-                  <div className="font-semibold">{blockedCvRequest.preview.endpointName}</div>
-                </div>
-                <div className="rounded-xl bg-white/70 px-3 py-2 border border-amber-100">
-                  <div className="font-bold text-slate-500">Input</div>
-                  <div className="font-semibold">{blockedCvRequest.preview.inputCharacterCount.toLocaleString()} chars</div>
-                </div>
-                <div className="rounded-xl bg-white/70 px-3 py-2 border border-amber-100">
-                  <div className="font-bold text-slate-500">Tokens</div>
-                  <div className="font-semibold">~{blockedCvRequest.preview.estimatedInputTokens.toLocaleString()}</div>
-                </div>
-                <div className="rounded-xl bg-white/70 px-3 py-2 border border-amber-100">
-                  <div className="font-bold text-slate-500">Evidence</div>
-                  <div className="font-semibold">{blockedCvRequest.preview.selectedEvidenceCount} selected</div>
-                </div>
-              </div>
-              <div className="mt-3 text-xs leading-relaxed text-amber-800">
-                Compact Context keeps role DNA, top verified evidence, eligibility evidence, CV rules, tone guard, and one-page constraints while reducing raw job text, debug logs, duplicate generated text, and lower-ranked evidence.
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-col gap-2 min-w-[220px]">
-              <button
-                type="button"
-                onClick={() => generateCvToDrive(blockedCvRequest.opportunity, blockedCvRequest.pack, undefined, { contextMode: 'compact' })}
-                className="rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-extrabold text-white shadow-sm hover:bg-emerald-700"
-              >
-                Use Compact Context
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const ok = window.confirm(`Continue anyway with ${blockedCvRequest.preview.inputCharacterCount.toLocaleString()} input chars (~${blockedCvRequest.preview.estimatedInputTokens.toLocaleString()} tokens)? This may cost more.`);
-                  if (ok) {
-                    generateCvToDrive(blockedCvRequest.opportunity, blockedCvRequest.pack, undefined, {
-                      contextMode: blockedCvRequest.preview.contextMode || 'standard',
-                      overrideCostGuard: true,
-                      skipPreflight: true
-                    });
-                  }
-                }}
-                className="rounded-xl border border-amber-300 bg-white px-4 py-2.5 text-xs font-extrabold text-amber-800 hover:bg-amber-100"
-              >
-                Continue Anyway
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setBlockedCvRequest(null);
-                  setCvError(null);
-                }}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-extrabold text-slate-600 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-          {(blockedCvRequest.preview.selectedEvidenceIds || []).length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-1.5">
-              {(blockedCvRequest.preview.selectedEvidenceIds || []).map((id) => (
-                <span key={id} className="rounded bg-white px-2 py-1 text-[11px] font-bold text-slate-700 border border-amber-100">{id}</span>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
@@ -936,9 +779,9 @@ export default function OpportunitiesPanel({ userId, refreshToken = 0 }: Opportu
         <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/70 px-4 py-3 text-xs text-slate-600">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
-              <div className="font-bold text-slate-700">CV AI budget controls</div>
+              <div className="font-bold text-slate-700">CV local mapping controls</div>
               <div className="mt-1">
-                Model: {costConfig?.model || 'gemini'} · CV JSON: {dryRunAi ? '0 calls in Dry Run' : '1 call unless cached'} · Daily dev usage: {costConfig ? `${costConfig.dailyAiCallsUsed}/${costConfig.dailyAiCallLimitDev}` : 'loading'}
+                CV JSON: local mapping, 0 Gemini calls · Dry Run skips Google Docs writes · Daily AI usage: {costConfig ? `${costConfig.dailyAiCallsUsed}/${costConfig.dailyAiCallLimitDev}` : 'loading'}
               </div>
             </div>
             <div className="flex flex-wrap gap-3">

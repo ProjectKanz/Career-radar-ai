@@ -181,7 +181,7 @@ export default function App() {
             }`}
           >
             <Award className="h-4 w-4 shrink-0" />
-            <span>CV Evidence Fact-Bank</span>
+            <span>CV Evidence Bank</span>
           </button>
 
           <div className="py-2 border-t border-slate-50 my-2"></div>

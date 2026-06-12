@@ -11,6 +11,7 @@ interface EvidenceBankPanelProps {
 const CATEGORIES = [
   'Work Achievement',
   'Academic Honor',
+  'Organizational Experience',
   'Side Project / Portfolio',
   'Certification',
   'Hard Skill / Technical Fact',
@@ -18,6 +19,44 @@ const CATEGORIES = [
 ];
 
 const evidencesCache = new Map<string, CVEvidence[]>();
+const EVIDENCE_ID_PATTERN = /^(WRK|EDU|ORG|PRJ|CRT|SKL|OTH)-\d{3}-\d{3}$/;
+
+function evidenceIdPrefix(category: string) {
+  if (category === 'Work Achievement') return 'WRK';
+  if (category === 'Academic Honor') return 'EDU';
+  if (category === 'Organizational Experience') return 'ORG';
+  if (category === 'Side Project / Portfolio') return 'PRJ';
+  if (category === 'Certification') return 'CRT';
+  if (category === 'Hard Skill / Technical Fact') return 'SKL';
+  return 'OTH';
+}
+
+function nextEvidenceId(category: string, evidences: CVEvidence[]) {
+  const prefix = evidenceIdPrefix(category);
+  let maxGroup = 0;
+
+  evidences.forEach((item) => {
+    const match = String(item.evidenceId || '').match(new RegExp(`^${prefix}-(\\d{3})-(\\d{3})$`));
+    if (match) maxGroup = Math.max(maxGroup, Number(match[1]));
+  });
+
+  return `${prefix}-${String(maxGroup + 1).padStart(3, '0')}-001`;
+}
+
+function nextEvidenceIdInSameGroup(currentEvidenceId: string, evidences: CVEvidence[], editingId: string | null) {
+  const match = currentEvidenceId.match(/^([A-Z]{3})-(\d{3})-\d{3}$/);
+  if (!match) return '';
+
+  const [, prefix, group] = match;
+  let maxClaim = 0;
+  evidences.forEach((item) => {
+    if (item.id === editingId) return;
+    const itemMatch = String(item.evidenceId || '').toUpperCase().trim().match(new RegExp(`^${prefix}-${group}-(\\d{3})$`));
+    if (itemMatch) maxClaim = Math.max(maxClaim, Number(itemMatch[1]));
+  });
+
+  return `${prefix}-${group}-${String(maxClaim + 1).padStart(3, '0')}`;
+}
 
 function sortEvidences(items: CVEvidence[]) {
   return items.sort((a, b) => a.evidenceId.localeCompare(b.evidenceId, undefined, { numeric: true, sensitivity: 'base' }));
@@ -29,6 +68,7 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [serverReadError, setServerReadError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Form states
   const [evidenceId, setEvidenceId] = useState('');
@@ -94,29 +134,42 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
   }, [userId]);
 
   const resetForm = () => {
-    // Generate a default ID based on category and existing items
-    const prefix = category.startsWith('Work') ? 'WRK' : category.startsWith('Academic') ? 'ACAD' : category.startsWith('Side') ? 'PRJ' : 'CERT';
-    const count = evidences.filter(e => e.evidenceId.startsWith(prefix)).length + 1;
-    setEvidenceId(`${prefix}-${String(count).padStart(2, '0')}`);
-    
+    const defaultCategory = CATEGORIES[0];
+    setEvidenceId(nextEvidenceId(defaultCategory, evidences));
     setTitle('');
     setOrganization('');
     setDescription('');
     setIsVerified(true);
-    setCategory(CATEGORIES[0]);
+    setCategory(defaultCategory);
     setIsAdding(false);
     setEditingId(null);
+    setFormError(null);
   };
 
   const handleCreateOrUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!evidenceId || !title || !description) return;
 
+    const normalizedEvidenceId = evidenceId.toUpperCase().trim();
+    if (!EVIDENCE_ID_PATTERN.test(normalizedEvidenceId)) {
+      setFormError('Use the format WRK-001-001, EDU-001-001, ORG-001-001, PRJ-001-001, CRT-001-001, SKL-001-001, or OTH-001-001.');
+      return;
+    }
+
+    const duplicate = evidences.some((item) => (
+      item.evidenceId.toUpperCase().trim() === normalizedEvidenceId && item.id !== editingId
+    ));
+    if (duplicate) {
+      const nextId = nextEvidenceIdInSameGroup(normalizedEvidenceId, evidences, editingId);
+      setFormError(`Evidence ID ${normalizedEvidenceId} already exists.${nextId ? ` Next claim in this group is ${nextId}.` : ' Use the next claim number or choose another ID.'}`);
+      return;
+    }
+
     const docId = editingId || doc(collection(db, cvEvidencesPath)).id;
     const itemPath = `${cvEvidencesPath}/${docId}`;
 
     const payload: CVEvidence = {
-      evidenceId: evidenceId.toUpperCase().trim(),
+      evidenceId: normalizedEvidenceId,
       category,
       title: title.trim(),
       organization: organization.trim(),
@@ -143,6 +196,7 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
     setOrganization(item.organization || '');
     setDescription(item.description);
     setIsVerified(item.isVerified);
+    setFormError(null);
     setIsAdding(true);
   };
 
@@ -169,10 +223,10 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold text-slate-900 sm:text-3xl tracking-tight flex items-center space-x-2">
             <Award className="h-7 w-7 text-emerald-600 animate-pulse" />
-            <span>CV Evidence Fact-Bank</span>
+            <span>CV Evidence Bank</span>
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            A secure repository of immutable, verifiable highlights, project metrics, and certs. The AI uses this list of grounding parameters to back up personalized resume drafts.
+            Save one verified CV claim per record. The AI uses these claims to create grounded resume bullets and avoid unsupported wording.
           </p>
         </div>
         <div className="mt-4 md:mt-0">
@@ -181,7 +235,7 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
             className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 shadow transition-all cursor-pointer"
           >
             <Plus className="h-4 w-4 mr-1.5" />
-            <span>Add Ground Evidence</span>
+            <span>Add CV Claim</span>
           </button>
         </div>
       </div>
@@ -213,7 +267,7 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
 
           <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center space-x-2">
             <ShieldCheck className="h-5 w-5 text-emerald-600" />
-            <span>{editingId ? 'Edit Evidence Record' : 'Record New Verifiable Highlight'}</span>
+            <span>{editingId ? 'Edit CV Claim' : 'Add One CV-Ready Claim'}</span>
           </h3>
 
           <form onSubmit={handleCreateOrUpdate} className="space-y-4">
@@ -223,9 +277,12 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. CSA-01, PRJ-04"
+                  placeholder="e.g. WRK-001-001, ORG-001-001, PRJ-001-001"
                   value={evidenceId}
-                  onChange={(e) => setEvidenceId(e.target.value)}
+                  onChange={(e) => {
+                    setEvidenceId(e.target.value);
+                    setFormError(null);
+                  }}
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:bg-white focus:ring-1 focus:ring-emerald-500/50"
                 />
               </div>
@@ -234,7 +291,12 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
                 <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Category Group</label>
                 <select
                   value={category}
-                  onChange={(e) => setCategory(e.target.value)}
+                  onChange={(e) => {
+                    const nextCategory = e.target.value;
+                    setCategory(nextCategory);
+                    setFormError(null);
+                    if (!editingId) setEvidenceId(nextEvidenceId(nextCategory, evidences));
+                  }}
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:bg-white focus:ring-1 focus:ring-emerald-500/50"
                 >
                   {CATEGORIES.map(cat => (
@@ -256,11 +318,11 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Title / Title of Accomplishment</label>
+              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Claim Title</label>
               <input
                 type="text"
                 required
-                placeholder="e.g. Cloud Security Associate certificate, Lead Android Migration Developer"
+                placeholder="e.g. Monthly content production, Shopee campaign monitoring"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:bg-white focus:ring-1 focus:ring-emerald-500/50"
@@ -268,16 +330,22 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase mb-2">Description & Verifiable Achievements (Write exact metrics, %, hours, tech stack)</label>
+              <label className="block text-xs font-semibold text-slate-600 uppercase mb-2">One Claim Description</label>
               <textarea
                 required
                 rows={4}
-                placeholder="e.g., Led architectural security review for 4 cloud services. Enforced IAM principle of least privilege, reducing service-account attack vectors by 24%. Built real-time log monitoring with GCP Pub/Sub."
+                placeholder="Write one bullet or claim only. Split separate achievements, tools, and metrics into separate records."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 outline-none focus:bg-white focus:ring-1 focus:ring-emerald-500/50 resize-none"
               />
             </div>
+
+            {formError && (
+              <div className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                {formError}
+              </div>
+            )}
 
             <div className="flex items-center space-x-2">
               <input
@@ -302,7 +370,7 @@ export default function EvidenceBankPanel({ userId }: EvidenceBankPanelProps) {
                 type="submit"
                 className="px-5 py-2 bg-emerald-600 text-white rounded-xl text-xs font-semibold hover:bg-emerald-700 shadow cursor-pointer"
               >
-                {editingId ? 'Save Edits' : 'Deploy Fact'}
+                {editingId ? 'Save Edits' : 'Save Claim'}
               </button>
             </div>
           </form>

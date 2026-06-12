@@ -18,7 +18,7 @@ export interface Profile {
 
 export interface CVEvidence {
   id?: string;
-  evidenceId: string; // CSA-01, XL-01, PORT-01, etc.
+  evidenceId: string; // WRK-001-001, ORG-001-001, PRJ-001-001, CRT-001-001, etc.
   category: string;
   title: string;
   organization?: string;

@@ -3,7 +3,7 @@ import { Radar, Sparkles, Building, ShieldCheck, FileText, AlertTriangle, Check,
 import { doc, getDocFromServer, getDocsFromServer, collection, writeBatch } from 'firebase/firestore';
 import { db, formatFirestoreServerError } from '../firebase';
 import { Profile, CVEvidence, CareerRadarOpportunity, ApplicationPack, CVEditChecklist, DailyApplyBrief } from '../types';
-import { aiRequestHeaders, hasStoredGeminiApiKey } from '../utils/aiSettings';
+import { aiRequestHeaders, hasStoredGeminiApiKey, extractApiErrorMessage, userFacingAiError } from '../utils/aiSettings';
 
 interface CareerRadarPanelProps {
   userId: string;
@@ -76,46 +76,7 @@ function safeText(value: unknown, fallback = '-') {
   }
 }
 
-function extractApiErrorMessage(value: unknown) {
-  if (!value) return 'Request failed.';
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value);
-      return extractApiErrorMessage(parsed);
-    } catch (_) {
-      return value;
-    }
-  }
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    if (record.error) return extractApiErrorMessage(record.error);
-    if (record.message) return String(record.message);
-  }
-  return String(value);
-}
 
-function userFacingAiError(value: unknown) {
-  const message = extractApiErrorMessage(value);
-  const lower = message.toLowerCase();
-
-  if (lower.includes('api key') || lower.includes('ai settings')) {
-    return message;
-  }
-
-  if (message.includes('503') || lower.includes('high demand') || lower.includes('unavailable')) {
-    return 'Gemini sedang padat. Coba lagi beberapa menit lagi, aktifkan Dry Run untuk preview gratis, atau coba lagi dengan API key/model yang kuotanya masih tersedia.';
-  }
-
-  if (lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource exhausted')) {
-    return 'Kuota atau batas gratis Gemini sedang tercapai. Coba lagi nanti, aktifkan Dry Run, atau gunakan API key Gemini lain.';
-  }
-
-  if (lower.includes('permission') || lower.includes('forbidden') || lower.includes('unauthorized')) {
-    return 'API key Gemini belum bisa dipakai untuk request ini. Cek kembali key di AI Settings atau buat API key baru dari Google AI Studio.';
-  }
-
-  return message;
-}
 
 function hashString(value: string) {
   let hash = 5381;
@@ -323,7 +284,10 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
 
   const runAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!jobText.trim()) return;
+    if (!jobText.trim()) {
+      setError('Job Description tidak boleh kosong. Silakan paste teks lowongan pekerjaan atau upload screenshot terlebih dahulu.');
+      return;
+    }
 
     setAnalyzing(true);
     setAnalysisResult(null);
@@ -378,8 +342,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
         const previewInputChars = aiRequestPreview.payloadDiagnostics?.inputCharacterCount || aiRequestPreview.inputCharacterCount;
         const maxInputChars = aiRequestPreview.payloadDiagnostics?.maxInputCharsPerCall || costConfig?.maxInputCharsPerCall || 45000;
         if (previewInputChars > maxInputChars) {
-          const largest = aiRequestPreview.payloadDiagnostics?.largestSections?.[0];
-          throw new Error(`Exact AI request is ${previewInputChars.toLocaleString()} chars, above the ${maxInputChars.toLocaleString()} char limit.${largest ? ` Largest section: ${largest.label} (${largest.chars.toLocaleString()} chars).` : ''}`);
+          throw new Error(`Ukuran request terlalu besar (${previewInputChars.toLocaleString()} karakter dari batas ${maxInputChars.toLocaleString()} karakter). Harap perpendek teks lowongan kerja, kurangi jumlah evidence di CV Evidence Bank, atau aktifkan mode Dry Run.`);
         }
       }
 
@@ -608,7 +571,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
             <span>AI Career Radar Matching Engine</span>
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Paste a job posting below. Gemini will extract its Technical DNA and ground it against your Experience Fact-Bank.
+            Paste a job posting below. Gemini will extract its Technical DNA and ground it against your CV Evidence Bank.
           </p>
         </div>
       </div>
@@ -657,7 +620,7 @@ export default function CareerRadarPanel({ userId, onOpportunitySaved }: CareerR
               <>
                 <h4 className="font-bold text-sm">Profile Context Needed</h4>
                 <p className="text-xs text-orange-700 mt-1">
-                  Fill <strong>Candidate Profile Context</strong> and add at least a few items in <strong>CV Evidence Fact-Bank</strong> before real AI matching. You can still use Dry Run to preview request size for free.
+                  Fill <strong>Candidate Profile Context</strong> and add at least a few items in <strong>CV Evidence Bank</strong> before real AI matching. You can still use Dry Run to preview request size for free.
                 </p>
               </>
             )}

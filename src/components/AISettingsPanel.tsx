@@ -32,7 +32,7 @@ export default function AISettingsPanel() {
             <span>AI Settings</span>
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Use Dry Run for free previews, or add your own Gemini API key when you want AI-generated matching and CV drafts.
+            Use Dry Run for free previews, or add your own Gemini API key for AI-assisted onboarding, screenshot extraction, and job matching. CV placeholder mapping runs locally.
           </p>
         </div>
       </div>
@@ -122,9 +122,9 @@ export default function AISettingsPanel() {
         </section>
 
         <section className="rounded-2xl border border-amber-100 bg-amber-50/50 p-6">
-          <h3 className="text-base font-bold text-amber-900">Public demo safety</h3>
+          <h3 className="text-base font-bold text-amber-900">Internal-use safety</h3>
           <p className="mt-2 text-sm leading-relaxed text-amber-800">
-            Visitors can still use Dry Run and cached views without AI cost. Real AI generation requires their own Gemini API key.
+            Keep this app internal until privacy review is complete. AI-assisted requests require the user's own Gemini API key; CV placeholder mapping does not spend a Gemini call.
           </p>
         </section>
       </div>

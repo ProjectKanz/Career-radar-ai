@@ -52,6 +52,16 @@ export default function AIUsageLogPanel() {
     return () => window.clearInterval(interval);
   }, []);
 
+  // Calculate savings
+  const sessionBypasses = entries.filter(
+    (e) => e.endpointName === '/api/generate-cv-template' && e.status === 'success' && e.cacheStatus !== 'dry_run'
+  ).length;
+  const sessionSavings = sessionBypasses * 1200;
+
+  // Read lifetime savings from localStorage
+  const lifetimeBypasses = Number(localStorage.getItem('careerRadarLocalCvBypasses') || 0);
+  const lifetimeSavings = lifetimeBypasses * 1200;
+
   return (
     <div id="ai_usage_log_panel" className="py-6 font-sans">
       <div className="md:flex md:items-center md:justify-between mb-8">
@@ -61,7 +71,7 @@ export default function AIUsageLogPanel() {
             <span>AI Usage Log</span>
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            Track Gemini calls made by matching, application pack generation, CV placeholder JSON, and checklist workflows.
+            Track Gemini calls and local CV placeholder mapping runs for matching, application packs, and checklist workflows.
           </p>
         </div>
 
@@ -76,6 +86,39 @@ export default function AIUsageLogPanel() {
         </button>
       </div>
 
+      {/* Cost Savings Cards */}
+      <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="p-5 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center gap-4">
+          <div className="p-3 bg-emerald-600 text-white rounded-xl shadow-sm">
+            <Activity className="h-6 w-6" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-emerald-800 uppercase tracking-wide">Current Session Savings</div>
+            <div className="text-lg font-extrabold text-slate-900 mt-1">
+              Estimated Rp {sessionSavings.toLocaleString('id-ID')} avoided by local mapping
+            </div>
+            <div className="text-[10px] text-emerald-600 font-semibold mt-0.5">
+              ({sessionBypasses} local CV template runs in this session)
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 bg-blue-50 border border-blue-100 rounded-2xl flex items-center gap-4">
+          <div className="p-3 bg-blue-600 text-white rounded-xl shadow-sm">
+            <CheckCircle2 className="h-6 w-6" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-blue-800 uppercase tracking-wide">Lifetime Cost Savings</div>
+            <div className="text-lg font-extrabold text-slate-900 mt-1">
+              Estimated Rp {lifetimeSavings.toLocaleString('id-ID')} avoided in total
+            </div>
+            <div className="text-[10px] text-blue-600 font-semibold mt-0.5">
+              ({lifetimeBypasses} total CV templates tailormade)
+            </div>
+          </div>
+        </div>
+      </div>
+
       {error && (
         <div className="mb-4 rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">
           {error}
@@ -85,7 +128,7 @@ export default function AIUsageLogPanel() {
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-800">Gemini API Calls</h3>
+            <h3 className="text-sm font-bold text-slate-800">AI and Local Mapping Usage</h3>
             <p className="text-xs text-slate-400 mt-0.5">Showing the latest {entries.length} recorded calls.</p>
           </div>
         </div>
@@ -97,7 +140,7 @@ export default function AIUsageLogPanel() {
           </div>
         ) : entries.length === 0 ? (
           <div className="p-8 text-sm text-slate-400">
-            No Gemini calls recorded in this server session yet.
+            No usage events recorded in this server session yet.
           </div>
         ) : (
           <div className="overflow-x-auto">
