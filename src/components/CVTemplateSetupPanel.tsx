@@ -146,6 +146,23 @@ function friendlyError(error: unknown) {
   return String(error || 'Something went wrong.');
 }
 
+async function readApiJson(response: Response, fallbackMessage: string) {
+  const text = await response.text();
+  let data: any = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (_) {
+      const preview = text.replace(/\s+/g, ' ').trim().slice(0, 180);
+      throw new Error(`${fallbackMessage} Server returned a non-JSON response: ${preview || response.statusText}`);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(data.error || fallbackMessage);
+  }
+  return data;
+}
+
 function evidenceIdPrefix(category: string) {
   if (category === 'Work Achievement') return 'WRK';
   if (category === 'Academic Honor') return 'EDU';
@@ -358,8 +375,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'CV source could not be parsed.');
+      const data = await readApiJson(response, 'CV source could not be parsed.');
 
       setParsedSource(data as ParsedCvSource);
       setWizardMessage(`Parsed ${data.parsedTextCharacterCount || 0} characters from ${cvSourceLabel(sourceType)}.`);
@@ -396,8 +412,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
           sourceName: parsedSource.sourceName
         })
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Gemini could not build CV onboarding claims.');
+      const data = await readApiJson(response, 'Gemini could not build CV onboarding claims.');
 
       const result = data as OnboardingResult;
       setOnboardingResult(result);
@@ -437,8 +452,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
           preserveSourceFormatting: false
         })
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Placeholder template could not be created.');
+      const data = await readApiJson(response, 'Placeholder template could not be created.');
 
       const created = data as CreatedTemplateDoc;
       const profileDraft = onboardingResult.profileDraft || {};

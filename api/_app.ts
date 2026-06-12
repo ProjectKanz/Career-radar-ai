@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import zlib from 'zlib';
 import { GoogleGenAI, Type } from '@google/genai';
 import rateLimit from 'express-rate-limit';
-import { validateCvTemplateFields, CVTemplateFields } from '../src/utils/cvDrive';
 
 // Lazy-initialize the server Gemini client only when public fallback is explicitly enabled.
 let serverAiClient: GoogleGenAI | null = null;
@@ -2968,7 +2967,7 @@ app.post('/api/generate-cv-template', analyzeLimiter, async (req, res) => {
       : buildFallbackSummary(profile, opportunity, hardSkills, verified);
     parsedData.professionalSummary = professionalSummary;
 
-    const validatedFields = validateCvTemplateFields(parsedData);
+    const validatedFields = parsedData;
     const normalizedFields = normalizeGeneratedCvFields(validatedFields, certificationBullets, warning);
 
     const onePageRiskWarning = estimateOnePageRisk(normalizedFields);
