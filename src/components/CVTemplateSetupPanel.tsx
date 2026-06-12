@@ -454,7 +454,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
           sourceDocumentId: parsedSource.sourceDocumentId,
           sourceName: parsedSource.sourceName,
           templateFields: onboardingResult.templateFields,
-          preserveSourceFormatting: false
+          preserveSourceFormatting: parsedSource.sourceType === 'google_docs'
         })
       });
       const data = await readApiJson(response, 'Placeholder template could not be created.');
