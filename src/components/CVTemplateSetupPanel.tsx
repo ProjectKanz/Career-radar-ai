@@ -179,8 +179,9 @@ function padEvidenceNumber(value: number) {
 
 function evidenceCoreDescription(value: unknown) {
   return String(value || '')
-    .replace(/\nSkill tags:[\s\S]*$/m, '')
-    .replace(/\nSource section:[\s\S]*$/m, '')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(Skill tags|Source group|Source section)\s*:/i.test(line))
+    .join('\n')
     .trim();
 }
 
@@ -423,6 +424,7 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
       setOnboardingResult(result);
       setEvidenceDrafts((result.evidenceDrafts || []).map((draft) => ({
         ...draft,
+        description: evidenceCoreDescription(draft.description),
         selected: true
       })));
       setWizardMessage('Generated placeholder mapping and one-claim evidence items. Review before saving.');
@@ -535,22 +537,25 @@ export default function CVTemplateSetupPanel({ userId }: CVTemplateSetupPanelPro
       const itemNumbers = new Map<string, number>();
 
       selectedDrafts.forEach((draft) => {
-        const key = normalizeEvidenceKey(draft);
+        const cleanDescription = evidenceCoreDescription(draft.description);
+        if (!cleanDescription) {
+          skippedCount += 1;
+          return;
+        }
+        const normalizedDraft = { ...draft, description: cleanDescription };
+        const key = normalizeEvidenceKey(normalizedDraft);
         if (existingKeys.has(key)) {
           skippedCount += 1;
           return;
         }
         existingKeys.add(key);
         const itemRef = doc(collection(db, evidenceCollectionPath));
-        const skillTags = draft.inferredSkillTags?.length ? `\nSkill tags: ${draft.inferredSkillTags.join(', ')}` : '';
-        const sourceGroupNote = draft.sourceGroup ? `\nSource group: ${draft.sourceGroup}` : '';
-        const sourceNote = draft.sourceSection ? `\nSource section: ${draft.sourceSection}` : '';
         const payload: CVEvidence = {
-          evidenceId: buildDraftEvidenceId(draft, prefixMaxGroup, groupNumbers, itemNumbers),
+          evidenceId: buildDraftEvidenceId(normalizedDraft, prefixMaxGroup, groupNumbers, itemNumbers),
           category: draft.category || 'Other Highlight',
           title: draft.title.trim(),
           organization: draft.organization.trim(),
-          description: `${draft.description.trim()}${skillTags}${sourceGroupNote}${sourceNote}`,
+          description: cleanDescription,
           isVerified: false,
           createdAt: now,
           updatedAt: now
